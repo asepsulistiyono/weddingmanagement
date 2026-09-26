@@ -1,0 +1,1252 @@
+import React, { useState } from 'react';
+import { 
+  Save, 
+  BellRing, 
+  Send, 
+  Heart, 
+  Calendar, 
+  CreditCard, 
+  Sparkles, 
+  CheckCircle2, 
+  AlertCircle,
+  BookOpen,
+  Check,
+  RotateCcw,
+  Eye,
+  Sliders,
+  HelpCircle,
+  Upload,
+  Zap,
+  Loader2,
+  Link as LinkIcon,
+  Copy,
+  ExternalLink,
+  Globe
+} from 'lucide-react';
+import type { WeddingSettings, ReligionFormat } from '../../types.ts';
+import { RELIGION_PRESETS, RELIGION_LIST, type ReligionPresetDetail } from '../../utils/religionPresets.ts';
+import { compressImageFile, formatFileSize } from '../../utils/imageCompressor.ts';
+import { generateWeddingSlug, sanitizeSlug, getFullInvitationUrl } from '../../utils/slugHelper.ts';
+
+interface SettingsTabProps {
+  settings: WeddingSettings | null;
+  onRefresh: () => void;
+}
+
+export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh }) => {
+  // Announcement state
+  const [announcementMsg, setAnnouncementMsg] = useState(settings?.announcement?.message || '');
+  const [announcementActive, setAnnouncementActive] = useState(settings?.announcement?.active || false);
+  const [announcementLoading, setAnnouncementLoading] = useState(false);
+  const [announcementToast, setAnnouncementToast] = useState(false);
+
+  // Religion / Invitation Format state
+  const initialReligion: ReligionFormat = settings?.religionFormat || settings?.invitationFormat?.religion || 'islam';
+  const [selectedReligion, setSelectedReligion] = useState<ReligionFormat>(initialReligion);
+
+  const [openingGreeting, setOpeningGreeting] = useState(
+    settings?.invitationFormat?.openingGreeting || RELIGION_PRESETS[initialReligion]?.config.openingGreeting || "Assalamu'alaikum Warahmatullahi Wabarakatuh"
+  );
+  const [openingSubtext, setOpeningSubtext] = useState(
+    settings?.invitationFormat?.openingSubtext || RELIGION_PRESETS[initialReligion]?.config.openingSubtext || ''
+  );
+  const [verseLabel, setVerseLabel] = useState(
+    settings?.invitationFormat?.holyVerse?.label || RELIGION_PRESETS[initialReligion]?.config.holyVerse.label || "Ayat Suci Al-Qur'an"
+  );
+  const [verseText, setVerseText] = useState(
+    settings?.invitationFormat?.holyVerse?.text || settings?.quote?.text || RELIGION_PRESETS[initialReligion]?.config.holyVerse.text || ''
+  );
+  const [verseSource, setVerseSource] = useState(
+    settings?.invitationFormat?.holyVerse?.source || settings?.quote?.source || RELIGION_PRESETS[initialReligion]?.config.holyVerse.source || ''
+  );
+  const [ceremonyName, setCeremonyName] = useState(
+    settings?.invitationFormat?.ceremonyName || settings?.events[0]?.name || RELIGION_PRESETS[initialReligion]?.config.ceremonyName || 'Akad Nikah'
+  );
+  const [receptionName, setReceptionName] = useState(
+    settings?.invitationFormat?.receptionName || settings?.events[1]?.name || RELIGION_PRESETS[initialReligion]?.config.receptionName || 'Resepsi Pernikahan'
+  );
+  const [closingGreeting, setClosingGreeting] = useState(
+    settings?.invitationFormat?.closingGreeting || RELIGION_PRESETS[initialReligion]?.config.closingGreeting || "Wassalamu'alaikum Warahmatullahi Wabarakatuh"
+  );
+  const [closingBlessing, setClosingBlessing] = useState(
+    settings?.invitationFormat?.closingBlessing || RELIGION_PRESETS[initialReligion]?.config.closingBlessing || ''
+  );
+  const [presetNotice, setPresetNotice] = useState<string | null>(null);
+  const [formatActiveTab, setFormatActiveTab] = useState<'editor' | 'preview'>('editor');
+
+  // Form states
+  const [groomName, setGroomName] = useState(settings?.groom.fullName || '');
+  const [groomNick, setGroomNick] = useState(settings?.groom.nickname || '');
+  const [groomFather, setGroomFather] = useState(settings?.groom.fatherName || '');
+  const [groomMother, setGroomMother] = useState(settings?.groom.motherName || '');
+  const [groomPhoto, setGroomPhoto] = useState(settings?.groom.photoUrl || '');
+  const [groomIg, setGroomIg] = useState(settings?.groom.instagram || '');
+  const [groomBio, setGroomBio] = useState(settings?.groom.bio || '');
+
+  const [brideName, setBrideName] = useState(settings?.bride.fullName || '');
+  const [brideNick, setBrideNick] = useState(settings?.bride.nickname || '');
+  const [brideFather, setBrideFather] = useState(settings?.bride.fatherName || '');
+  const [brideMother, setBrideMother] = useState(settings?.bride.motherName || '');
+  const [bridePhoto, setBridePhoto] = useState(settings?.bride.photoUrl || '');
+  const [brideIg, setBrideIg] = useState(settings?.bride.instagram || '');
+  const [brideBio, setBrideBio] = useState(settings?.bride.bio || '');
+
+  const [countdownDate, setCountdownDate] = useState(settings?.countdownDate || '2026-10-24T08:00:00');
+
+  const [akadVenue, setAkadVenue] = useState(settings?.events[0]?.location || '');
+  const [akadAddress, setAkadAddress] = useState(settings?.events[0]?.address || '');
+  const [akadTime, setAkadTime] = useState(settings?.events[0]?.time || '');
+
+  const [resepsiVenue, setResepsiVenue] = useState(settings?.events[1]?.location || '');
+  const [resepsiAddress, setResepsiAddress] = useState(settings?.events[1]?.address || '');
+  const [resepsiTime, setResepsiTime] = useState(settings?.events[1]?.time || '');
+
+  const [bank1Num, setBank1Num] = useState(settings?.bankAccounts[0]?.accountNumber || '');
+  const [bank1Name, setBank1Name] = useState(settings?.bankAccounts[0]?.accountName || '');
+  const [bank2Num, setBank2Num] = useState(settings?.bankAccounts[1]?.accountNumber || '');
+  const [bank2Name, setBank2Name] = useState(settings?.bankAccounts[1]?.accountName || '');
+
+  const [giftRecipient, setGiftRecipient] = useState(settings?.giftAddress.recipient || '');
+  const [giftPhone, setGiftPhone] = useState(settings?.giftAddress.phone || '');
+  const [giftAddress, setGiftAddress] = useState(settings?.giftAddress.address || '');
+
+  const [saveLoading, setSaveLoading] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Wedding custom URL slug states
+  const [weddingSlug, setWeddingSlug] = useState(
+    settings?.slug || (settings?.groom?.nickname && settings?.bride?.nickname ? generateWeddingSlug(settings.groom.nickname, settings.bride.nickname) : 'rizky_dan_siti')
+  );
+  const [isSlugManual, setIsSlugManual] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  const handleGroomNickChange = (val: string) => {
+    setGroomNick(val);
+    if (!isSlugManual) {
+      setWeddingSlug(generateWeddingSlug(val, brideNick));
+    }
+  };
+
+  const handleBrideNickChange = (val: string) => {
+    setBrideNick(val);
+    if (!isSlugManual) {
+      setWeddingSlug(generateWeddingSlug(groomNick, val));
+    }
+  };
+
+  const handleCopyLink = () => {
+    const url = getFullInvitationUrl(weddingSlug);
+    navigator.clipboard.writeText(url);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2500);
+  };
+
+  // Profile photo compression state
+  const [groomCompLoading, setGroomCompLoading] = useState(false);
+  const [groomCompInfo, setGroomCompInfo] = useState<string | null>(null);
+  const [brideCompLoading, setBrideCompLoading] = useState(false);
+  const [brideCompInfo, setBrideCompInfo] = useState<string | null>(null);
+
+  const handleCompressGroomPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setGroomCompLoading(true);
+    setGroomCompInfo(null);
+    try {
+      const res = await compressImageFile(file, { maxWidth: 900, maxHeight: 900, quality: 0.68 });
+      setGroomPhoto(res.dataUrl);
+      setGroomCompInfo(`WebP ${formatFileSize(res.compressedSize)} (Hemat ${res.savedPercentage}%)`);
+    } catch (err: any) {
+      alert('Gagal mengompres foto: ' + err.message);
+    } finally {
+      setGroomCompLoading(false);
+    }
+  };
+
+  const handleCompressBridePhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBrideCompLoading(true);
+    setBrideCompInfo(null);
+    try {
+      const res = await compressImageFile(file, { maxWidth: 900, maxHeight: 900, quality: 0.68 });
+      setBridePhoto(res.dataUrl);
+      setBrideCompInfo(`WebP ${formatFileSize(res.compressedSize)} (Hemat ${res.savedPercentage}%)`);
+    } catch (err: any) {
+      alert('Gagal mengompres foto: ' + err.message);
+    } finally {
+      setBrideCompLoading(false);
+    }
+  };
+
+  const handleBroadcastAnnouncement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAnnouncementLoading(true);
+    try {
+      const res = await fetch('/api/superadmin/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: announcementMsg,
+          active: announcementActive
+        })
+      });
+      if (res.ok) {
+        setAnnouncementToast(true);
+        setTimeout(() => setAnnouncementToast(false), 3000);
+        onRefresh();
+      }
+    } catch (err) {
+      console.error('Failed to broadcast announcement:', err);
+    } finally {
+      setAnnouncementLoading(false);
+    }
+  };
+
+  const handleApplyPreset = (religionId: ReligionFormat) => {
+    setSelectedReligion(religionId);
+    const preset = RELIGION_PRESETS[religionId];
+    if (!preset) return;
+    setOpeningGreeting(preset.config.openingGreeting);
+    setOpeningSubtext(preset.config.openingSubtext || '');
+    setVerseLabel(preset.config.holyVerse.label);
+    setVerseText(preset.config.holyVerse.text);
+    setVerseSource(preset.config.holyVerse.source);
+    setCeremonyName(preset.config.ceremonyName);
+    setReceptionName(preset.config.receptionName);
+    setClosingGreeting(preset.config.closingGreeting);
+    setClosingBlessing(preset.config.closingBlessing || '');
+    setPresetNotice(`Template ${preset.name} (${preset.badge}) berhasil diterapkan!`);
+    setTimeout(() => setPresetNotice(null), 3500);
+  };
+
+  const handleSaveAllSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!settings) return;
+
+    setSaveLoading(true);
+    setSaveSuccess(false);
+
+    const targetSlug = weddingSlug ? sanitizeSlug(weddingSlug) : generateWeddingSlug(groomNick || groomName, brideNick || brideName);
+    const coupleDisplay = `${groomNick || groomName} & ${brideNick || brideName}`;
+
+    const updated: WeddingSettings = {
+      ...settings,
+      id: targetSlug,
+      slug: targetSlug,
+      coupleNames: coupleDisplay,
+      title: `The Wedding of ${coupleDisplay}`,
+      countdownDate,
+      religionFormat: selectedReligion,
+      invitationFormat: {
+        religion: selectedReligion,
+        openingGreeting,
+        openingSubtext,
+        holyVerse: {
+          label: verseLabel,
+          text: verseText,
+          source: verseSource
+        },
+        ceremonyName,
+        receptionName,
+        closingGreeting,
+        closingBlessing
+      },
+      quote: {
+        text: verseText,
+        source: verseSource
+      },
+      groom: {
+        ...settings.groom,
+        fullName: groomName,
+        nickname: groomNick,
+        fatherName: groomFather,
+        motherName: groomMother,
+        photoUrl: groomPhoto,
+        instagram: groomIg,
+        bio: groomBio
+      },
+      bride: {
+        ...settings.bride,
+        fullName: brideName,
+        nickname: brideNick,
+        fatherName: brideFather,
+        motherName: brideMother,
+        photoUrl: bridePhoto,
+        instagram: brideIg,
+        bio: brideBio
+      },
+      events: [
+        {
+          ...(settings.events[0] || { id: 'akad', date: 'Sabtu, 24 Oktober 2026', mapUrl: '' }),
+          name: ceremonyName,
+          location: akadVenue,
+          address: akadAddress,
+          time: akadTime
+        },
+        {
+          ...(settings.events[1] || { id: 'resepsi', date: 'Sabtu, 24 Oktober 2026', mapUrl: '' }),
+          name: receptionName,
+          location: resepsiVenue,
+          address: resepsiAddress,
+          time: resepsiTime
+        }
+      ],
+      bankAccounts: [
+        {
+          id: 'bank-1',
+          bank: 'Bank Central Asia (BCA)',
+          accountNumber: bank1Num,
+          accountName: bank1Name
+        },
+        {
+          id: 'bank-2',
+          bank: 'Bank Mandiri',
+          accountNumber: bank2Num,
+          accountName: bank2Name
+        }
+      ],
+      giftAddress: {
+        recipient: giftRecipient,
+        phone: giftPhone,
+        address: giftAddress
+      }
+    };
+
+    try {
+      const res = await fetch('/api/superadmin/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...updated,
+          slug: targetSlug,
+          oldSlug: settings?.slug
+        })
+      });
+      if (res.ok) {
+        setSaveSuccess(true);
+        if (targetSlug && window.location.hash.startsWith('#/')) {
+          window.location.hash = `#/${targetSlug}`;
+        }
+        setTimeout(() => setSaveSuccess(false), 3000);
+        onRefresh();
+      }
+    } catch (err) {
+      console.error('Failed to update settings:', err);
+    } finally {
+      setSaveLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-10">
+      {/* Wedding Custom URL Suffix & Public Invitation Card */}
+      <div className="bg-gradient-to-br from-amber-500/10 via-amber-100/40 to-white border-2 border-amber-300 rounded-3xl p-6 sm:p-8 shadow-xs">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-5 pb-5 border-b border-amber-200/80">
+          <div className="flex items-start gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-amber-800 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Globe className="w-6 h-6 text-amber-100" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-serif-wedding text-2xl font-bold text-amber-950">
+                  Tautan Publik &amp; URL Undangan Mempelai
+                </h3>
+                <span className="text-[11px] font-bold bg-amber-200 text-amber-900 px-2.5 py-0.5 rounded-full">
+                  Akhiran URL Khusus
+                </span>
+              </div>
+              <p className="text-xs text-amber-900/80 mt-1 max-w-2xl leading-relaxed">
+                URL unik pernikahan Anda berakhiran nama kedua mempelai. Tamu yang membuka URL ini otomatis melihat informasi, foto, dan jadwal khusus pasangan Anda.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-stretch md:self-auto shrink-0">
+            <button
+              type="button"
+              onClick={handleCopyLink}
+              className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-white hover:bg-amber-50 text-amber-900 border border-amber-300 rounded-xl text-xs font-semibold transition-all shadow-xs cursor-pointer"
+            >
+              {copiedLink ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span className="text-emerald-700">Tersalin ke Clipboard!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4 text-amber-800" />
+                  <span>Salin Tautan</span>
+                </>
+              )}
+            </button>
+
+            <a
+              href={getFullInvitationUrl(weddingSlug)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-semibold transition-all shadow-xs"
+            >
+              <ExternalLink className="w-4 h-4" />
+              <span>Buka Undangan</span>
+            </a>
+          </div>
+        </div>
+
+        {/* Slug configuration input & live preview */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">
+          <div className="lg:col-span-6">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-semibold text-amber-950 uppercase tracking-wider">
+                Kustomisasi Akhiran URL (Slug)
+              </label>
+              <label className="text-[11px] text-amber-900 flex items-center gap-1.5 cursor-pointer font-medium">
+                <input
+                  type="checkbox"
+                  checked={!isSlugManual}
+                  onChange={(e) => {
+                    setIsSlugManual(!e.target.checked);
+                    if (e.target.checked) {
+                      setWeddingSlug(generateWeddingSlug(groomNick || groomName, brideNick || brideName));
+                    }
+                  }}
+                  className="rounded text-amber-700 focus:ring-amber-500 w-3.5 h-3.5"
+                />
+                <span>Otomatis dari Nama</span>
+              </label>
+            </div>
+
+            <div className="relative">
+              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-mono text-xs text-stone-400 font-bold">
+                /#/
+              </span>
+              <input
+                type="text"
+                value={weddingSlug}
+                onChange={(e) => {
+                  setIsSlugManual(true);
+                  setWeddingSlug(sanitizeSlug(e.target.value));
+                }}
+                placeholder="thomas_dan_juwita"
+                className="w-full pl-9 pr-3.5 py-2.5 bg-white border border-amber-300 rounded-xl text-xs sm:text-sm font-mono text-amber-950 focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+          </div>
+
+          <div className="lg:col-span-6 bg-white/90 border border-amber-200/90 rounded-2xl p-3.5">
+            <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider block mb-1">
+              Pratinjau Alamat Lengkap (Dibagikan ke Tamu)
+            </span>
+            <div className="flex items-center gap-2 font-mono text-xs text-amber-950 break-all bg-amber-50/70 px-3 py-2 rounded-xl border border-amber-200/70">
+              <LinkIcon className="w-4 h-4 text-amber-700 shrink-0" />
+              <span className="font-semibold text-amber-900">
+                {getFullInvitationUrl(weddingSlug)}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+      {/* Real-Time Live Announcement Broadcast Card */}
+      <div className="bg-amber-500/10 border border-amber-500/30 rounded-3xl p-6 sm:p-8">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="w-10 h-10 rounded-xl bg-amber-600 text-white flex items-center justify-center">
+            <BellRing className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="font-serif-wedding text-2xl font-bold text-amber-950">
+              Siaran Pengumuman Real-Time (Live Broadcast)
+            </h3>
+            <p className="text-xs text-amber-800">
+              Pesan ini akan langsung muncul sebagai banner informasi di halaman utama untuk seluruh pengunjung yang sedang membuka website undangan secara bersamaan.
+            </p>
+          </div>
+        </div>
+
+        {announcementToast && (
+          <div className="my-3 p-3 bg-emerald-100 text-emerald-800 text-xs rounded-xl flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+            <span>Pengumuman berhasil disiarkan secara real-time ke semua tamu online!</span>
+          </div>
+        )}
+
+        <form onSubmit={handleBroadcastAnnouncement} className="mt-4 space-y-3">
+          <textarea
+            rows={2}
+            value={announcementMsg}
+            onChange={(e) => setAnnouncementMsg(e.target.value)}
+            placeholder="Contoh: Info Parkir: Tamu undangan akad & resepsi dapat memarkirkan kendaraan di Basement Gedung B..."
+            className="w-full p-3.5 bg-white border border-amber-300 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 text-stone-800"
+          />
+
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <label className="flex items-center gap-2 text-xs font-semibold text-amber-950 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={announcementActive}
+                onChange={(e) => setAnnouncementActive(e.target.checked)}
+                className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4"
+              />
+              <span>Aktifkan Banner Pengumuman di Website</span>
+            </label>
+
+            <button
+              type="submit"
+              disabled={announcementLoading}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-800 hover:bg-amber-900 text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer shadow-sm disabled:opacity-50"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>{announcementLoading ? 'Menyiarkan...' : 'Siarkan Pengumuman Sekarang'}</span>
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* Main Settings Form */}
+      <form onSubmit={handleSaveAllSettings} className="space-y-8">
+        {saveSuccess && (
+          <div className="p-4 bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs sm:text-sm rounded-2xl flex items-center gap-3">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+            <span>Semua perubahan data mempelai, jadwal acara, dan rekening telah berhasil disimpan!</span>
+          </div>
+        )}
+
+        {/* 0. Pilihan Format Undangan Agama & Tradisi */}
+        <div className="bg-white p-6 sm:p-8 rounded-3xl border border-stone-200 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-stone-100 pb-5">
+            <div>
+              <h4 className="font-serif-wedding text-2xl font-bold text-stone-800 flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-amber-700" />
+                <span>Format Undangan Agama &amp; Tradisi</span>
+              </h4>
+              <p className="text-xs text-stone-500 mt-1 max-w-2xl">
+                Sesuaikan nuansa undangan untuk <strong>Islam, Kristen/Katolik, Hindu, Buddha, Konghucu</strong>, atau <strong>Universal (Nasional)</strong>. Pilihan ini mengatur salam pembuka, ayat suci/kutipan mutiara, nama prosesi sakral, hingga doa dan salam penutup.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-1.5 p-1 bg-stone-100 rounded-xl self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setFormatActiveTab('editor')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  formatActiveTab === 'editor'
+                    ? 'bg-white text-stone-800 shadow-xs'
+                    : 'text-stone-500 hover:text-stone-700'
+                }`}
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span>Edit Rincian</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFormatActiveTab('preview')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  formatActiveTab === 'preview'
+                    ? 'bg-white text-stone-800 shadow-xs'
+                    : 'text-stone-500 hover:text-stone-700'
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>Pratinjau Format</span>
+              </button>
+            </div>
+          </div>
+
+          {presetNotice && (
+            <div className="p-3.5 bg-amber-50 border border-amber-200 text-amber-900 text-xs sm:text-sm rounded-2xl flex items-center gap-2.5 animate-fade-in shadow-xs">
+              <Sparkles className="w-4 h-4 text-amber-600 flex-shrink-0" />
+              <span className="font-medium">{presetNotice}</span>
+            </div>
+          )}
+
+          {/* Grid 6 Kartu Format Agama */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {RELIGION_LIST.map((relKey) => {
+              const item = RELIGION_PRESETS[relKey];
+              const isSelected = selectedReligion === relKey;
+
+              return (
+                <div
+                  key={relKey}
+                  onClick={() => handleApplyPreset(relKey)}
+                  className={`p-4 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between relative group ${
+                    isSelected
+                      ? 'border-amber-700 bg-amber-50/60 ring-2 ring-amber-600/20 shadow-xs'
+                      : 'border-stone-200 hover:border-amber-300 hover:bg-stone-50/70'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl">{item.iconText}</span>
+                        <div>
+                          <h5 className="text-sm font-bold text-stone-800 group-hover:text-amber-900 transition-colors">
+                            {item.name}
+                          </h5>
+                          <span className="text-[10px] text-stone-400 font-medium block">
+                            {item.badge}
+                          </span>
+                        </div>
+                      </div>
+
+                      {isSelected ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-800 text-white text-[10px] font-semibold">
+                          <Check className="w-3 h-3" />
+                          <span>Aktif</span>
+                        </span>
+                      ) : (
+                        <span className="opacity-0 group-hover:opacity-100 text-[10px] font-semibold text-stone-400 transition-opacity">
+                          Klik Pilih
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="text-xs text-stone-600 line-clamp-2 mt-1">
+                      {item.tagline}
+                    </p>
+                  </div>
+
+                  <div className="mt-3 pt-2.5 border-t border-stone-100/80 flex items-center justify-between text-[11px]">
+                    <span className="text-stone-500 font-medium truncate max-w-[140px]">
+                      {item.config.ceremonyName}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleApplyPreset(relKey);
+                      }}
+                      className={`font-semibold px-2 py-1 rounded-md text-[11px] transition-colors ${
+                        isSelected
+                          ? 'text-amber-800 bg-amber-100/70 font-bold'
+                          : 'text-stone-600 hover:text-stone-900 hover:bg-stone-200/60'
+                      }`}
+                    >
+                      {isSelected ? 'Format Terpilih' : 'Terapkan'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Active Configuration Editor or Preview */}
+          {formatActiveTab === 'editor' ? (
+            <div className="bg-stone-50/80 p-5 sm:p-6 rounded-2xl border border-stone-200/80 space-y-5">
+              <div className="flex items-center justify-between flex-wrap gap-2 border-b border-stone-200/70 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">{RELIGION_PRESETS[selectedReligion]?.iconText}</span>
+                  <div>
+                    <h5 className="text-xs sm:text-sm font-bold text-stone-800">
+                      Rincian Teks Format: {RELIGION_PRESETS[selectedReligion]?.name}
+                    </h5>
+                    <span className="text-[11px] text-stone-500">
+                      Anda bebas mengubah kata-kata di bawah ini tanpa merusak template asli.
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleApplyPreset(selectedReligion)}
+                  className="inline-flex items-center gap-1 text-[11px] text-stone-600 hover:text-stone-900 hover:bg-stone-200 px-2.5 py-1.5 rounded-lg border border-stone-300 transition-colors cursor-pointer"
+                  title="Kembalikan teks format ini ke default template"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Reset Default Template</span>
+                </button>
+              </div>
+
+              {/* Salam Pembuka & Nama Upacara */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="sm:col-span-1">
+                  <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                    Salam Pembuka
+                  </label>
+                  <input
+                    type="text"
+                    value={openingGreeting}
+                    onChange={(e) => setOpeningGreeting(e.target.value)}
+                    placeholder="Contoh: Assalamu'alaikum Warahmatullahi Wabarakatuh"
+                    className="w-full px-3.5 py-2.5 bg-white border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+
+                <div className="sm:col-span-1">
+                  <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                    Nama Upacara Utama (Acara 1)
+                  </label>
+                  <input
+                    type="text"
+                    value={ceremonyName}
+                    onChange={(e) => setCeremonyName(e.target.value)}
+                    placeholder="Akad Nikah / Pemberkatan Kudus / Pawiwahan"
+                    className="w-full px-3.5 py-2.5 bg-white border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+
+                <div className="sm:col-span-1">
+                  <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                    Nama Syukuran / Resepsi (Acara 2)
+                  </label>
+                  <input
+                    type="text"
+                    value={receptionName}
+                    onChange={(e) => setReceptionName(e.target.value)}
+                    placeholder="Resepsi Pernikahan / Walimatul 'Ursy"
+                    className="w-full px-3.5 py-2.5 bg-white border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+              </div>
+
+              {/* Kalimat Pengantar Mukadimah */}
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                  Kalimat Mukadimah / Pengantar Undangan
+                </label>
+                <textarea
+                  rows={2}
+                  value={openingSubtext}
+                  onChange={(e) => setOpeningSubtext(e.target.value)}
+                  placeholder="Dengan memohon rahmat dan ridho Tuhan Yang Maha Esa..."
+                  className="w-full p-3 bg-white border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              {/* Ayat Suci & Kutipan Berkah */}
+              <div className="p-4 bg-white rounded-2xl border border-stone-200 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                      Label / Jenis Kutipan Suci
+                    </label>
+                    <input
+                      type="text"
+                      value={verseLabel}
+                      onChange={(e) => setVerseLabel(e.target.value)}
+                      placeholder="Ayat Suci Al-Qur'an / Ayat Alkitab / Sloka Rg Veda"
+                      className="w-full px-3.5 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                      Sumber Surat / Ayat / Kitab
+                    </label>
+                    <input
+                      type="text"
+                      value={verseSource}
+                      onChange={(e) => setVerseSource(e.target.value)}
+                      placeholder="QS. Ar-Rum: 21 / Matius 19:6"
+                      className="w-full px-3.5 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                    Isi Teks Ayat / Petikan Suci / Mutiara Kasih
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={verseText}
+                    onChange={(e) => setVerseText(e.target.value)}
+                    placeholder="Tuliskan teks ayat atau kutipan..."
+                    className="w-full p-3 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500 leading-relaxed"
+                  />
+                </div>
+
+                {/* Alternatif Ayat Lain jika tersedia */}
+                {RELIGION_PRESETS[selectedReligion]?.alternativeVerses && (
+                  <div className="pt-2 border-t border-stone-100 flex items-center flex-wrap gap-2">
+                    <span className="text-[11px] font-semibold text-stone-500">
+                      Pilihan Ayat / Petikan Lain:
+                    </span>
+                    {RELIGION_PRESETS[selectedReligion].alternativeVerses!.map((alt, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          setVerseLabel(alt.label);
+                          setVerseText(alt.text);
+                          setVerseSource(alt.source);
+                        }}
+                        className="text-[11px] px-2.5 py-1 rounded-full bg-stone-100 hover:bg-amber-100 hover:text-amber-900 text-stone-600 border border-stone-200 transition-colors cursor-pointer"
+                      >
+                        {alt.source}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Salam Penutup & Doa Berkah */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                    Salam Penutup
+                  </label>
+                  <input
+                    type="text"
+                    value={closingGreeting}
+                    onChange={(e) => setClosingGreeting(e.target.value)}
+                    placeholder="Wassalamu'alaikum Warahmatullahi Wabarakatuh"
+                    className="w-full px-3.5 py-2.5 bg-white border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                    Kalimat Doa / Restu Penutup
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={closingBlessing}
+                    onChange={(e) => setClosingBlessing(e.target.value)}
+                    placeholder="Merupakan suatu kehormatan dan kebahagiaan bagi kami..."
+                    className="w-full p-2.5 bg-white border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* Live Simulated Preview */
+            <div className="p-6 sm:p-8 bg-[#FAF7F2] rounded-3xl border border-amber-200/80 text-stone-800 relative overflow-hidden shadow-inner">
+              <div className="max-w-xl mx-auto text-center space-y-5">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 border border-amber-300 text-amber-900 text-xs font-semibold">
+                  <span>{RELIGION_PRESETS[selectedReligion]?.iconText}</span>
+                  <span>Pratinjau Format Undangan: {RELIGION_PRESETS[selectedReligion]?.name}</span>
+                </div>
+
+                <div className="space-y-1">
+                  <h3 className="font-serif-wedding text-xl sm:text-2xl font-bold text-amber-950">
+                    {openingGreeting}
+                  </h3>
+                  <p className="text-xs sm:text-sm text-stone-600 max-w-md mx-auto leading-relaxed">
+                    {openingSubtext}
+                  </p>
+                </div>
+
+                {/* Verse Card */}
+                <div className="bg-white/90 p-5 rounded-2xl border border-amber-200/70 shadow-xs max-w-lg mx-auto">
+                  <div className="flex items-center justify-center gap-1.5 text-amber-800 text-[11px] uppercase tracking-widest font-semibold mb-2">
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>{verseLabel}</span>
+                  </div>
+                  <p className="font-serif-wedding text-xs sm:text-sm italic text-stone-700 leading-relaxed mb-2">
+                    "{verseText}"
+                  </p>
+                  <span className="text-[11px] font-bold text-amber-900 block">
+                    — {verseSource}
+                  </span>
+                </div>
+
+                {/* Procession Badges */}
+                <div className="flex items-center justify-center gap-3 flex-wrap text-xs">
+                  <div className="px-3.5 py-1.5 rounded-xl bg-white border border-stone-200 shadow-xs">
+                    <span className="text-stone-400 block text-[10px] uppercase font-bold">Acara 1</span>
+                    <span className="font-bold text-stone-800">{ceremonyName}</span>
+                  </div>
+                  <div className="px-3.5 py-1.5 rounded-xl bg-white border border-stone-200 shadow-xs">
+                    <span className="text-stone-400 block text-[10px] uppercase font-bold">Acara 2</span>
+                    <span className="font-bold text-stone-800">{receptionName}</span>
+                  </div>
+                </div>
+
+                {/* Closing */}
+                <div className="pt-3 border-t border-stone-200/70 text-center space-y-1">
+                  <p className="text-xs text-stone-500 italic">
+                    "{closingBlessing}"
+                  </p>
+                  <p className="font-serif-wedding text-sm sm:text-base font-bold text-amber-950 pt-1">
+                    {closingGreeting}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 1. Mempelai Pria */}
+        <div className="bg-white p-6 sm:p-8 rounded-3xl border border-stone-200 shadow-xs">
+          <h4 className="font-serif-wedding text-2xl font-bold text-stone-800 mb-4 flex items-center gap-2">
+            <Heart className="w-5 h-5 text-amber-700" />
+            <span>Data Mempelai Pria</span>
+          </h4>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-xs font-semibold text-stone-600 uppercase tracking-wider mb-1">
+                Nama Lengkap &amp; Gelar
+              </label>
+              <input
+                type="text"
+                value={groomName}
+                onChange={(e) => setGroomName(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                Nama Panggilan
+              </label>
+              <input
+                type="text"
+                value={groomNick}
+                onChange={(e) => handleGroomNickChange(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                Nama Ayah
+              </label>
+              <input
+                type="text"
+                value={groomFather}
+                onChange={(e) => setGroomFather(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                Nama Ibu
+              </label>
+              <input
+                type="text"
+                value={groomMother}
+                onChange={(e) => setGroomMother(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                Username Instagram
+              </label>
+              <input
+                type="text"
+                value={groomIg}
+                onChange={(e) => setGroomIg(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider">
+                  Foto Profil Pria
+                </label>
+                {groomCompInfo && (
+                  <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-bold">
+                    ⚡ {groomCompInfo}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={groomPhoto}
+                  onChange={(e) => setGroomPhoto(e.target.value)}
+                  placeholder="URL gambar atau unggah file..."
+                  className="flex-1 px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                <label className={`inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl border text-xs font-semibold cursor-pointer transition-colors shrink-0 ${
+                  groomCompLoading
+                    ? 'bg-amber-100 text-amber-900 border-amber-300 cursor-wait'
+                    : 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-200'
+                }`}>
+                  {groomCompLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-amber-700" />
+                  ) : (
+                    <Upload className="w-4 h-4 text-amber-700" />
+                  )}
+                  <span>{groomCompLoading ? 'Mengompres...' : 'Unggah & Kompres'}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={groomCompLoading}
+                    onChange={handleCompressGroomPhoto}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 2. Mempelai Wanita */}
+        <div className="bg-white p-6 sm:p-8 rounded-3xl border border-stone-200 shadow-xs">
+          <h4 className="font-serif-wedding text-2xl font-bold text-stone-800 mb-4 flex items-center gap-2">
+            <Heart className="w-5 h-5 text-rose-600" />
+            <span>Data Mempelai Wanita</span>
+          </h4>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-xs font-semibold text-stone-600 uppercase tracking-wider mb-1">
+                Nama Lengkap &amp; Gelar
+              </label>
+              <input
+                type="text"
+                value={brideName}
+                onChange={(e) => setBrideName(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                Nama Panggilan
+              </label>
+              <input
+                type="text"
+                value={brideNick}
+                onChange={(e) => handleBrideNickChange(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                Nama Ayah
+              </label>
+              <input
+                type="text"
+                value={brideFather}
+                onChange={(e) => setBrideFather(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                Nama Ibu
+              </label>
+              <input
+                type="text"
+                value={brideMother}
+                onChange={(e) => setBrideMother(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                Username Instagram
+              </label>
+              <input
+                type="text"
+                value={brideIg}
+                onChange={(e) => setBrideIg(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider">
+                  Foto Profil Wanita
+                </label>
+                {brideCompInfo && (
+                  <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-bold">
+                    ⚡ {brideCompInfo}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={bridePhoto}
+                  onChange={(e) => setBridePhoto(e.target.value)}
+                  placeholder="URL gambar atau unggah file..."
+                  className="flex-1 px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                <label className={`inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl border text-xs font-semibold cursor-pointer transition-colors shrink-0 ${
+                  brideCompLoading
+                    ? 'bg-amber-100 text-amber-900 border-amber-300 cursor-wait'
+                    : 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-200'
+                }`}>
+                  {brideCompLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-amber-700" />
+                  ) : (
+                    <Upload className="w-4 h-4 text-amber-700" />
+                  )}
+                  <span>{brideCompLoading ? 'Mengompres...' : 'Unggah & Kompres'}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={brideCompLoading}
+                    onChange={handleCompressBridePhoto}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 3. Jadwal & Lokasi Acara */}
+        <div className="bg-white p-6 sm:p-8 rounded-3xl border border-stone-200 shadow-xs">
+          <h4 className="font-serif-wedding text-2xl font-bold text-stone-800 mb-4 flex items-center gap-2">
+            <Calendar className="w-5 h-5 text-amber-700" />
+            <span>Lokasi &amp; Jam Acara</span>
+          </h4>
+
+          <div className="space-y-6">
+            <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200">
+              <h5 className="font-semibold text-xs text-stone-700 uppercase tracking-wider mb-3">
+                Akad Nikah
+              </h5>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <input
+                  type="text"
+                  placeholder="Gedung / Masjid"
+                  value={akadVenue}
+                  onChange={(e) => setAkadVenue(e.target.value)}
+                  className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                <input
+                  type="text"
+                  placeholder="Waktu (e.g. 08:00 - 10:00 WIB)"
+                  value={akadTime}
+                  onChange={(e) => setAkadTime(e.target.value)}
+                  className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                <input
+                  type="text"
+                  placeholder="Alamat Lengkap"
+                  value={akadAddress}
+                  onChange={(e) => setAkadAddress(e.target.value)}
+                  className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+            </div>
+
+            <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200">
+              <h5 className="font-semibold text-xs text-stone-700 uppercase tracking-wider mb-3">
+                Resepsi Pernikahan
+              </h5>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <input
+                  type="text"
+                  placeholder="Ballroom / Gedung"
+                  value={resepsiVenue}
+                  onChange={(e) => setResepsiVenue(e.target.value)}
+                  className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                <input
+                  type="text"
+                  placeholder="Waktu (e.g. 11:00 - 14:00 WIB)"
+                  value={resepsiTime}
+                  onChange={(e) => setResepsiTime(e.target.value)}
+                  className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                <input
+                  type="text"
+                  placeholder="Alamat Lengkap"
+                  value={resepsiAddress}
+                  onChange={(e) => setResepsiAddress(e.target.value)}
+                  className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 4. Rekening Amplop Digital */}
+        <div className="bg-white p-6 sm:p-8 rounded-3xl border border-stone-200 shadow-xs">
+          <h4 className="font-serif-wedding text-2xl font-bold text-stone-800 mb-4 flex items-center gap-2">
+            <CreditCard className="w-5 h-5 text-amber-700" />
+            <span>Rekening Amplop Digital &amp; Alamat Kado</span>
+          </h4>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+            <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200">
+              <span className="text-xs font-bold text-stone-700 uppercase mb-2 block">
+                Rekening BCA
+              </span>
+              <input
+                type="text"
+                placeholder="Nomor Rekening BCA"
+                value={bank1Num}
+                onChange={(e) => setBank1Num(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500 mb-2"
+              />
+              <input
+                type="text"
+                placeholder="Atas Nama"
+                value={bank1Name}
+                onChange={(e) => setBank1Name(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+
+            <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200">
+              <span className="text-xs font-bold text-stone-700 uppercase mb-2 block">
+                Rekening Mandiri
+              </span>
+              <input
+                type="text"
+                placeholder="Nomor Rekening Mandiri"
+                value={bank2Num}
+                onChange={(e) => setBank2Num(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500 mb-2"
+              />
+              <input
+                type="text"
+                placeholder="Atas Nama"
+                value={bank2Name}
+                onChange={(e) => setBank2Name(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+          </div>
+
+          <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200">
+            <span className="text-xs font-bold text-stone-700 uppercase mb-2 block">
+              Alamat Pengiriman Kado Fisik
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+              <input
+                type="text"
+                placeholder="Nama Penerima"
+                value={giftRecipient}
+                onChange={(e) => setGiftRecipient(e.target.value)}
+                className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <input
+                type="text"
+                placeholder="No. Telepon / WhatsApp"
+                value={giftPhone}
+                onChange={(e) => setGiftPhone(e.target.value)}
+                className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+            <textarea
+              rows={2}
+              placeholder="Alamat Lengkap Pengiriman..."
+              value={giftAddress}
+              onChange={(e) => setGiftAddress(e.target.value)}
+              className="w-full p-3 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+            />
+          </div>
+        </div>
+
+        {/* Submit */}
+        <div className="flex items-center justify-end gap-4">
+          <button
+            type="submit"
+            disabled={saveLoading}
+            className="inline-flex items-center gap-2 px-8 py-3.5 rounded-2xl bg-stone-900 hover:bg-stone-800 text-white font-semibold text-xs sm:text-sm tracking-wide shadow-md transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <Save className="w-4 h-4" />
+            <span>{saveLoading ? 'Menyimpan...' : 'Simpan Semua Pengaturan'}</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};

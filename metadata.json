@@ -1,0 +1,6 @@
+{
+  "name": "Wedding Invitation & Management",
+  "description": "Website undangan pernikahan digital interaktif dengan galeri foto, peta interaktif Google Maps, reservasi RSVP online, serta dashboard Admin & Super Admin real-time.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
