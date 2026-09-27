@@ -4,6 +4,7 @@ import { Instagram, Heart, BookOpen } from 'lucide-react';
 import type { WeddingSettings } from '../../types.ts';
 import { useLanguage } from '../../context/LanguageContext.tsx';
 import { getTranslatedInvitationFormat } from '../../utils/religionPresets.ts';
+import { getThemeById } from '../../utils/themeTemplates.ts';
 
 interface CoupleSectionProps {
   settings: WeddingSettings | null;
@@ -11,6 +12,16 @@ interface CoupleSectionProps {
 
 export const CoupleSection: React.FC<CoupleSectionProps> = ({ settings }) => {
   const { t, lang } = useLanguage();
+  const activeTheme = getThemeById(settings?.themeTemplateId);
+
+  const frameRadiusClass =
+    activeTheme.photoFrameStyle === 'arch-frame'
+      ? 'rounded-t-full rounded-b-3xl'
+      : activeTheme.photoFrameStyle === 'rounded-luxury'
+      ? 'rounded-3xl'
+      : activeTheme.photoFrameStyle === 'classic-oval'
+      ? 'rounded-[45%]'
+      : 'rounded-full border-dashed';
 
   const format = getTranslatedInvitationFormat(settings?.invitationFormat, lang);
   const openingGreeting = format.openingGreeting;
@@ -76,26 +87,42 @@ export const CoupleSection: React.FC<CoupleSectionProps> = ({ settings }) => {
         whileInView={{ opacity: 1, y: 0 }}
         viewport={{ once: true }}
         transition={{ duration: 0.7 }}
-        className="max-w-2xl mx-auto text-center mb-20 bg-amber-50/70 border border-amber-200/60 rounded-3xl p-8 sm:p-10 shadow-sm relative overflow-hidden"
+        style={{
+          backgroundColor: activeTheme.palette.accentSoftBg,
+          borderColor: activeTheme.palette.accentBorder
+        }}
+        className="max-w-2xl mx-auto text-center mb-20 border rounded-3xl p-8 sm:p-10 shadow-sm relative overflow-hidden"
       >
-        <div className="flex items-center justify-center gap-2 text-amber-800/80 mb-4">
+        <div
+          style={{ color: activeTheme.palette.primary }}
+          className="flex items-center justify-center gap-2 mb-4"
+        >
           <BookOpen className="w-4 h-4" />
           <span className="text-xs tracking-widest uppercase font-semibold">{verseLabel}</span>
         </div>
         <p className="font-serif-wedding text-lg sm:text-xl text-stone-700 leading-relaxed italic mb-4">
           "{quoteText}"
         </p>
-        <span className="text-xs sm:text-sm font-semibold text-amber-900 tracking-wider">
+        <span
+          style={{ color: activeTheme.palette.headingText }}
+          className="text-xs sm:text-sm font-semibold tracking-wider"
+        >
           — {quoteSource}
         </span>
       </motion.div>
 
       {/* Section Header */}
       <div className="text-center mb-16">
-        <span className="text-xs uppercase tracking-[0.25em] text-amber-800 font-semibold">
+        <span
+          style={{ color: activeTheme.palette.primary }}
+          className="text-xs uppercase tracking-[0.25em] font-semibold"
+        >
           {t.couple.eyebrow}
         </span>
-        <h2 className="font-serif-wedding text-3xl sm:text-4xl md:text-5xl font-bold text-stone-800 mt-2">
+        <h2
+          style={{ color: activeTheme.palette.headingText }}
+          className="font-serif-wedding text-3xl sm:text-4xl md:text-5xl font-bold mt-2"
+        >
           {t.couple.title}
         </h2>
         <p className="text-stone-500 text-sm max-w-md mx-auto mt-2">
@@ -111,20 +138,33 @@ export const CoupleSection: React.FC<CoupleSectionProps> = ({ settings }) => {
           whileInView={{ opacity: 1, x: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.8 }}
-          className="bg-white rounded-3xl p-6 sm:p-8 border border-stone-200/90 shadow-md text-center flex flex-col items-center relative group hover:border-amber-300 transition-all"
+          style={{ borderColor: activeTheme.palette.accentBorder }}
+          className="bg-white rounded-3xl p-6 sm:p-8 border shadow-md text-center flex flex-col items-center relative group transition-all"
         >
-          <div className="relative w-44 h-44 sm:w-52 sm:h-52 mb-6 rounded-full overflow-hidden p-1.5 border-2 border-dashed border-amber-400/80 shadow-inner">
+          <div
+            style={{ borderColor: activeTheme.palette.primary }}
+            className={`relative w-44 h-44 sm:w-52 sm:h-52 mb-6 overflow-hidden p-1.5 border-2 shadow-inner ${frameRadiusClass}`}
+          >
             <img
               src={groom?.photoUrl || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=800&auto=format&fit=crop'}
               alt={groom?.fullName || 'Mempelai Pria'}
-              className="w-full h-full object-cover rounded-full group-hover:scale-105 transition-transform duration-500"
+              className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ${frameRadiusClass}`}
             />
           </div>
 
-          <span className="text-xs font-semibold uppercase tracking-widest text-amber-700 bg-amber-50 px-3 py-1 rounded-full mb-3">
+          <span
+            style={{
+              color: activeTheme.palette.primary,
+              backgroundColor: activeTheme.palette.accentSoftBg
+            }}
+            className="text-xs font-semibold uppercase tracking-widest px-3 py-1 rounded-full mb-3"
+          >
             {t.couple.groomBadge}
           </span>
-          <h3 className="font-serif-wedding text-2xl sm:text-3xl font-bold text-stone-900 mb-2">
+          <h3
+            style={{ color: activeTheme.palette.headingText }}
+            className="font-serif-wedding text-2xl sm:text-3xl font-bold mb-2"
+          >
             {groom?.fullName || 'Muhammad Rizky Pratama, S.Kom.'}
           </h3>
           <p className="text-xs text-stone-500 font-medium mb-4">
@@ -141,9 +181,10 @@ export const CoupleSection: React.FC<CoupleSectionProps> = ({ settings }) => {
               href={`https://instagram.com/${groom.instagram.replace('@', '')}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-xs text-amber-800 hover:text-amber-600 bg-stone-50 hover:bg-stone-100 px-4 py-1.5 rounded-full border border-stone-200 transition-colors"
+              style={{ color: activeTheme.palette.primary }}
+              className="inline-flex items-center gap-1.5 text-xs bg-stone-50 hover:bg-stone-100 px-4 py-1.5 rounded-full border border-stone-200 transition-colors"
             >
-              <Instagram className="w-3.5 h-3.5 text-amber-700" />
+              <Instagram className="w-3.5 h-3.5" style={{ color: activeTheme.palette.primary }} />
               <span>{groom.instagram}</span>
             </a>
           )}
@@ -155,20 +196,33 @@ export const CoupleSection: React.FC<CoupleSectionProps> = ({ settings }) => {
           whileInView={{ opacity: 1, x: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.8 }}
-          className="bg-white rounded-3xl p-6 sm:p-8 border border-stone-200/90 shadow-md text-center flex flex-col items-center relative group hover:border-amber-300 transition-all"
+          style={{ borderColor: activeTheme.palette.accentBorder }}
+          className="bg-white rounded-3xl p-6 sm:p-8 border shadow-md text-center flex flex-col items-center relative group transition-all"
         >
-          <div className="relative w-44 h-44 sm:w-52 sm:h-52 mb-6 rounded-full overflow-hidden p-1.5 border-2 border-dashed border-amber-400/80 shadow-inner">
+          <div
+            style={{ borderColor: activeTheme.palette.primary }}
+            className={`relative w-44 h-44 sm:w-52 sm:h-52 mb-6 overflow-hidden p-1.5 border-2 shadow-inner ${frameRadiusClass}`}
+          >
             <img
               src={bride?.photoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=800&auto=format&fit=crop'}
               alt={bride?.fullName || 'Mempelai Wanita'}
-              className="w-full h-full object-cover rounded-full group-hover:scale-105 transition-transform duration-500"
+              className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ${frameRadiusClass}`}
             />
           </div>
 
-          <span className="text-xs font-semibold uppercase tracking-widest text-amber-700 bg-amber-50 px-3 py-1 rounded-full mb-3">
+          <span
+            style={{
+              color: activeTheme.palette.primary,
+              backgroundColor: activeTheme.palette.accentSoftBg
+            }}
+            className="text-xs font-semibold uppercase tracking-widest px-3 py-1 rounded-full mb-3"
+          >
             {t.couple.brideBadge}
           </span>
-          <h3 className="font-serif-wedding text-2xl sm:text-3xl font-bold text-stone-900 mb-2">
+          <h3
+            style={{ color: activeTheme.palette.headingText }}
+            className="font-serif-wedding text-2xl sm:text-3xl font-bold mb-2"
+          >
             {bride?.fullName || 'Siti Nurhaliza, S.E.'}
           </h3>
           <p className="text-xs text-stone-500 font-medium mb-4">

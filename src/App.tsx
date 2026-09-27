@@ -20,10 +20,12 @@ import { AdminDashboard } from './components/admin/AdminDashboard.tsx';
 import { BellRing, X } from 'lucide-react';
 import type { Guest } from './types.ts';
 import { parseWeddingAndGuestFromUrl } from './utils/slugHelper.ts';
+import { getThemeById } from './utils/themeTemplates.ts';
 
 const AppContent: React.FC = () => {
   const { isAuthenticated, isSuperAdmin } = useAuth();
   const { guests, settings, startMusic } = useRealtime();
+  const activeTheme = getThemeById(settings?.themeTemplateId);
 
   const [currentGuest, setCurrentGuest] = useState<Guest | null>(null);
   const [isCoverOpen, setIsCoverOpen] = useState<boolean>(true);
@@ -96,7 +98,14 @@ const AppContent: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#FDFBF7] text-stone-800 font-sans selection:bg-amber-200 selection:text-amber-900">
+    <div
+      data-wedding-theme={activeTheme.id}
+      style={{
+        backgroundColor: activeTheme.palette.pageBg,
+        color: activeTheme.palette.bodyText
+      }}
+      className="min-h-screen font-sans selection:bg-amber-200 selection:text-amber-900 transition-colors duration-500"
+    >
       {/* Cover / Welcome Envelope Modal Overlay */}
       {isCoverOpen && (
         <CoverOverlay

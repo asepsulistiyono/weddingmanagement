@@ -3,6 +3,7 @@ import { Heart, ShieldCheck } from 'lucide-react';
 import type { WeddingSettings } from '../../types.ts';
 import { useLanguage } from '../../context/LanguageContext.tsx';
 import { getTranslatedInvitationFormat } from '../../utils/religionPresets.ts';
+import { getThemeById } from '../../utils/themeTemplates.ts';
 
 interface FooterSectionProps {
   settings: WeddingSettings | null;
@@ -20,9 +21,13 @@ export const FooterSection: React.FC<FooterSectionProps> = ({
   const { t, lang } = useLanguage();
   const format = getTranslatedInvitationFormat(settings?.invitationFormat, lang);
   const coupleName = settings ? (settings.coupleNames || `${settings.groom.fullName} & ${settings.bride.fullName}`) : 'Muhammad Rizky & Siti Nurhaliza';
+  const activeTheme = getThemeById(settings?.themeTemplateId);
 
   return (
-    <footer className="bg-stone-900 text-stone-300 py-16 px-4 text-center border-t border-stone-800">
+    <footer
+      style={{ backgroundColor: activeTheme.palette.footerBg }}
+      className="text-stone-300 py-16 px-4 text-center border-t border-stone-800 transition-colors duration-500"
+    >
       <div className="max-w-3xl mx-auto space-y-6">
         <p className="font-serif-wedding text-3xl sm:text-4xl text-amber-200">
           {coupleName}

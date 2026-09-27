@@ -21,10 +21,12 @@ import {
   Link as LinkIcon,
   Copy,
   ExternalLink,
-  Globe
+  Globe,
+  Palette
 } from 'lucide-react';
-import type { WeddingSettings, ReligionFormat } from '../../types.ts';
+import type { WeddingSettings, ReligionFormat, ThemeTemplateId } from '../../types.ts';
 import { RELIGION_PRESETS, RELIGION_LIST, type ReligionPresetDetail } from '../../utils/religionPresets.ts';
+import { WEDDING_THEME_TEMPLATES, getThemeById } from '../../utils/themeTemplates.ts';
 import { compressImageFile, formatFileSize } from '../../utils/imageCompressor.ts';
 import { generateWeddingSlug, sanitizeSlug, getFullInvitationUrl } from '../../utils/slugHelper.ts';
 
@@ -43,6 +45,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
   // Religion / Invitation Format state
   const initialReligion: ReligionFormat = settings?.religionFormat || settings?.invitationFormat?.religion || 'islam';
   const [selectedReligion, setSelectedReligion] = useState<ReligionFormat>(initialReligion);
+
+  // Website Design Theme state (12 templates)
+  const [selectedThemeId, setSelectedThemeId] = useState<ThemeTemplateId>(
+    settings?.themeTemplateId || 'royal-javanese-gold'
+  );
+  const activeThemeObj = getThemeById(selectedThemeId);
 
   const [openingGreeting, setOpeningGreeting] = useState(
     settings?.invitationFormat?.openingGreeting || RELIGION_PRESETS[initialReligion]?.config.openingGreeting || "Assalamu'alaikum Warahmatullahi Wabarakatuh"
@@ -237,6 +245,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
       coupleNames: coupleDisplay,
       title: `The Wedding of ${coupleDisplay}`,
       countdownDate,
+      themeTemplateId: selectedThemeId,
       religionFormat: selectedReligion,
       invitationFormat: {
         religion: selectedReligion,
@@ -509,6 +518,83 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
             <span>Semua perubahan data mempelai, jadwal acara, dan rekening telah berhasil disimpan!</span>
           </div>
         )}
+
+        {/* Pilihan 12 Template Tema Desain Website */}
+        <div className="bg-white p-6 sm:p-8 rounded-3xl border border-stone-200 shadow-xs space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-stone-100 pb-4">
+            <div>
+              <h4 className="font-serif-wedding text-2xl font-bold text-stone-800 flex items-center gap-2">
+                <Palette className="w-5 h-5 text-amber-700" />
+                <span>Pilihan Template Tema Desain Website ({WEDDING_THEME_TEMPLATES.length} Tema)</span>
+              </h4>
+              <p className="text-xs text-stone-500 mt-1 max-w-2xl">
+                Pilih tampilan warna sampul, halaman utama, kartu acara, dan gaya bingkai foto mempelai. Tema terpilih: <strong className="text-stone-900">{activeThemeObj.number}. {activeThemeObj.name}</strong>.
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {activeThemeObj.palette.swatchColors.map((hex, idx) => (
+                <span
+                  key={idx}
+                  className="w-5 h-5 rounded-full border border-stone-300 shadow-2xs"
+                  style={{ backgroundColor: hex }}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {WEDDING_THEME_TEMPLATES.map((tpl) => {
+              const isChosen = tpl.id === selectedThemeId;
+              return (
+                <button
+                  key={tpl.id}
+                  type="button"
+                  onClick={() => setSelectedThemeId(tpl.id)}
+                  className={`text-left p-4 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                    isChosen
+                      ? 'border-2 border-amber-600 bg-amber-50/50 shadow-sm'
+                      : 'border-stone-200 hover:border-stone-300 bg-stone-50/40'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="text-[11px] font-mono font-bold text-stone-500">
+                        Tema #{tpl.number} • {tpl.category}
+                      </span>
+                      <p className="font-serif-wedding text-lg font-bold text-stone-900 leading-snug">
+                        {tpl.name}
+                      </p>
+                    </div>
+                    {isChosen && (
+                      <span className="w-6 h-6 rounded-full bg-amber-600 text-white flex items-center justify-center shrink-0">
+                        <Check className="w-3.5 h-3.5 text-white" />
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-[11px] text-stone-600 line-clamp-2">
+                    {tpl.tagline}
+                  </p>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-stone-200/70">
+                    <div className="flex items-center gap-1.5">
+                      {tpl.palette.swatchColors.map((hex, i) => (
+                        <span
+                          key={i}
+                          className="w-4 h-4 rounded-full border border-stone-300"
+                          style={{ backgroundColor: hex }}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-[10.5px] font-semibold text-stone-600">
+                      {tpl.motifLabel}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         {/* 0. Pilihan Format Undangan Agama & Tradisi */}
         <div className="bg-white p-6 sm:p-8 rounded-3xl border border-stone-200 shadow-xs space-y-6">

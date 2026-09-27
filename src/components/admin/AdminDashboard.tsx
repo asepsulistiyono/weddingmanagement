@@ -18,7 +18,8 @@ import {
   Sparkles,
   Radio,
   Images,
-  Database
+  Database,
+  Palette
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRealtime } from '../../context/RealtimeContext.tsx';
@@ -29,8 +30,10 @@ import { SettingsTab } from './SettingsTab.tsx';
 import { AdminUsersTab } from './AdminUsersTab.tsx';
 import { GalleryManagementTab } from './GalleryManagementTab.tsx';
 import { DatabaseSettingsTab } from './DatabaseSettingsTab.tsx';
+import { ThemeTemplatesTab } from './ThemeTemplatesTab.tsx';
 import { GuestQrModal } from '../invitation/GuestQrModal.tsx';
 import type { Guest } from '../../types.ts';
+import { getThemeById } from '../../utils/themeTemplates.ts';
 
 interface AdminDashboardProps {
   onBackToInvitation: () => void;
@@ -48,8 +51,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToInvitati
   } = useRealtime();
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'guests' | 'checkin' | 'wishes' | 'gallery' | 'settings' | 'users' | 'database'
+    'overview' | 'themes' | 'guests' | 'checkin' | 'wishes' | 'gallery' | 'settings' | 'users' | 'database'
   >(() => isOwner ? 'users' : 'overview');
+
+  const currentActiveTheme = getThemeById(settings?.themeTemplateId);
 
   const [selectedQrGuest, setSelectedQrGuest] = useState<Guest | null>(null);
 
@@ -235,6 +240,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToInvitati
                 </button>
 
                 <button
+                  onClick={() => setActiveTab('themes')}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors ${
+                    activeTab === 'themes'
+                      ? 'bg-amber-500 text-stone-950 font-bold'
+                      : 'text-stone-300 hover:text-white hover:bg-stone-800'
+                  }`}
+                >
+                  <Palette className="w-4 h-4" />
+                  <span>Tema Desain (12)</span>
+                </button>
+
+                <button
                   onClick={() => setActiveTab('settings')}
                   className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors ${
                     activeTab === 'settings'
@@ -325,6 +342,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToInvitati
 
                 {isSuperAdmin && (
                   <>
+                    <button
+                      onClick={() => setActiveTab('themes')}
+                      className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors ${
+                        activeTab === 'themes'
+                          ? 'bg-amber-500 text-stone-950 font-bold'
+                          : 'text-stone-300 hover:text-white hover:bg-stone-800'
+                      }`}
+                    >
+                      <Palette className="w-4 h-4 text-amber-300" />
+                      <span>Tema Desain (12)</span>
+                    </button>
+
                     <button
                       onClick={() => setActiveTab('settings')}
                       className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors ${
@@ -528,7 +557,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToInvitati
             </div>
 
             {/* Quick Actions Shortcuts */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {isSuperAdmin && (
+                <div
+                  onClick={() => setActiveTab('themes')}
+                  className="bg-white p-6 rounded-3xl border border-stone-200 shadow-xs hover:border-amber-500 transition-all cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-900 flex items-center justify-center group-hover:scale-110 transition-transform">
+                      <Palette className="w-5 h-5 text-amber-800" />
+                    </div>
+                    <span className="text-[11px] font-semibold text-amber-800">
+                      12 Template
+                    </span>
+                  </div>
+                  <h4 className="font-serif-wedding text-lg font-bold text-stone-900 mb-1">
+                    Tema Desain Website
+                  </h4>
+                  <p className="text-xs text-stone-500">
+                    Aktif: <strong>{currentActiveTheme.name}</strong>. Pilih dari 12 tema warna &amp; gaya undangan.
+                  </p>
+                </div>
+              )}
+
               <div 
                 onClick={() => setActiveTab('guests')}
                 className="bg-white p-6 rounded-3xl border border-stone-200 shadow-xs hover:border-amber-400 transition-all cursor-pointer group"
@@ -605,6 +656,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToInvitati
         {/* GALLERY TAB */}
         {activeTab === 'gallery' && (
           <GalleryManagementTab />
+        )}
+
+        {/* THEMES TAB (Super Admin) */}
+        {activeTab === 'themes' && isSuperAdmin && (
+          <ThemeTemplatesTab
+            settings={settings}
+            onRefresh={refreshAll}
+            onOpenPublicInvitation={onBackToInvitation}
+          />
         )}
 
         {/* SETTINGS TAB (Super Admin) */}

@@ -84,6 +84,20 @@ export interface GalleryPhoto {
 
 export type ReligionFormat = 'islam' | 'kristen' | 'hindu' | 'buddha' | 'konghucu' | 'universal';
 
+export type ThemeTemplateId =
+  | 'royal-javanese-gold'
+  | 'botanical-sage-emerald'
+  | 'sakura-blush-rose'
+  | 'midnight-celestial-navy'
+  | 'terracotta-tuscan-sunset'
+  | 'champagne-ivory-classic'
+  | 'lavender-provence-romance'
+  | 'burgundy-velvet-luxury'
+  | 'ocean-breeze-santorini'
+  | 'minimalist-monochrome-noir'
+  | 'sundanese-silver-keraton'
+  | 'balinese-tropical-resort';
+
 export interface InvitationFormatConfig {
   religion: ReligionFormat;
   openingGreeting: string;
@@ -132,6 +146,7 @@ export interface WeddingSettings {
   };
   events: WeddingEvent[];
   countdownDate: string; // ISO string e.g. '2026-10-24T08:00:00'
+  themeTemplateId?: ThemeTemplateId;
   religionFormat?: ReligionFormat;
   invitationFormat?: InvitationFormatConfig;
   quote: {
