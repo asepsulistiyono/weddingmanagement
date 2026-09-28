@@ -7,7 +7,7 @@ declare global {
   var _postgresPool: Pool | undefined;
 }
 
-// Function to create or retrieve the connection pool.
+// Function to create or retrieve the connection pool using the Object Method
 export const createPool = () => {
   if (!global._postgresPool) {
     global._postgresPool = new Pool({
@@ -25,6 +25,15 @@ export const createPool = () => {
     });
   }
   return global._postgresPool;
+};
+
+export const getActiveConnectionInfo = () => {
+  return {
+    isExternalSupabase: false,
+    host: process.env.SQL_HOST || '127.0.0.1',
+    database: process.env.SQL_DB_NAME || 'ai_studio_db',
+    provider: 'Cloud SQL PostgreSQL 16 (asia-southeast1 • Supabase Compatible)',
+  };
 };
 
 // Create or retrieve the pool instance.

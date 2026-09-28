@@ -3,6 +3,8 @@ import http from 'http';
 import path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import * as dbRepo from './src/db/repository.ts';
+import { getActiveConnectionInfo } from './src/db/index.ts';
+import { requireAuth, type AuthRequest } from './src/middleware/auth.ts';
 import type { 
   AdminUser, 
   Guest, 
@@ -835,6 +837,65 @@ app.post('/api/auth/login', (req, res) => {
   }
 
   return res.status(401).json({ error: 'Kredensial tidak valid. Silakan periksa kembali username dan kata sandi Anda.' });
+});
+
+// Google Sign-In via Firebase Auth (verified with firebase-admin and linked to PostgreSQL users table)
+app.post('/api/auth/google', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const firebaseUser = req.user;
+    if (!firebaseUser || !firebaseUser.uid) {
+      return res.status(401).json({ error: 'Token tidak valid.' });
+    }
+
+    const email = (firebaseUser.email || `${firebaseUser.uid}@wedding.local`).toLowerCase();
+    const isOwnerAccount = email === 'asepsulistiyono1@gmail.com';
+    const existingAdmin = adminUsers.find(
+      (u) => u.email?.toLowerCase() === email || u.id === firebaseUser.uid
+    );
+
+    const role = isOwnerAccount
+      ? 'super_admin'
+      : existingAdmin?.role || 'super_admin';
+
+    await dbRepo.createDbUser({
+      uid: firebaseUser.uid,
+      username: existingAdmin?.username || email.split('@')[0],
+      email,
+      name: firebaseUser.name || existingAdmin?.name || email.split('@')[0],
+      role,
+      weddingSlug: existingAdmin?.weddingSlug || 'rizky_dan_siti',
+      coupleNames: existingAdmin?.coupleNames || 'Rizky & Siti',
+      active: true,
+    });
+
+    const userRecord: AdminUser = existingAdmin || {
+      id: firebaseUser.uid,
+      username: email.split('@')[0],
+      name: firebaseUser.name || email.split('@')[0],
+      email,
+      role: role as AdminUser['role'],
+      weddingSlug: 'rizky_dan_siti',
+      coupleNames: 'Rizky & Siti',
+      active: true,
+      isOwner: isOwnerAccount,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (!existingAdmin) {
+      adminUsers.push(userRecord);
+    }
+
+    return res.json({
+      success: true,
+      user: {
+        ...userRecord,
+        isOwner: isOwnerAccount || Boolean(userRecord.isOwner),
+      },
+    });
+  } catch (error: any) {
+    console.error('Failed to authenticate Google user:', error);
+    return res.status(500).json({ error: error.message || 'Gagal memproses login Google.' });
+  }
 });
 
 // Self-service password reset
@@ -1676,9 +1737,18 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
   adminUsers.push(newAdmin);
   dbRepo.createDbUser({
     uid: newAdmin.id,
+    username: newAdmin.username,
+    password: newAdmin.password,
     email: newAdmin.email || `${newAdmin.username}@wedding.local`,
     name: newAdmin.name,
-    role: newAdmin.role
+    role: newAdmin.role,
+    weddingSlug: newAdmin.weddingSlug,
+    coupleNames: newAdmin.coupleNames,
+    phone: newAdmin.phone,
+    notes: newAdmin.notes,
+    active: newAdmin.active,
+    createdBy: newAdmin.createdBy,
+    createdByName: newAdmin.createdByName
   }).catch(err => console.error('DB user persist error:', err));
 
   res.status(201).json({ 
@@ -1725,6 +1795,22 @@ app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], (req, res) 
     targetUser.coupleNames = `${gn} & ${bn}`;
     createWeddingTemplate(newSlug, gn, bn);
   }
+
+  dbRepo.createDbUser({
+    uid: targetUser.id,
+    username: targetUser.username,
+    password: (targetUser as any).password,
+    email: targetUser.email || `${targetUser.username}@wedding.local`,
+    name: targetUser.name,
+    role: targetUser.role,
+    weddingSlug: targetUser.weddingSlug,
+    coupleNames: targetUser.coupleNames,
+    phone: targetUser.phone,
+    notes: targetUser.notes,
+    active: targetUser.active,
+    createdBy: targetUser.createdBy,
+    createdByName: targetUser.createdByName
+  }).catch(err => console.error('DB user update error:', err));
 
   res.json({ 
     success: true, 
@@ -1834,24 +1920,107 @@ app.get('/api/superadmin/export/users', (req, res) => {
 
 // Database & Supabase connection status endpoint
 app.get('/api/admin/database-status', async (req, res) => {
+  const connInfo = getActiveConnectionInfo();
   try {
-    const list = await dbRepo.getAllGuests();
+    const counts = await dbRepo.getTableCounts();
     res.json({
       connected: true,
-      provider: 'Cloud SQL / PostgreSQL (Supabase Compatible)',
+      provider: connInfo.provider,
+      isExternalSupabase: connInfo.isExternalSupabase,
       dialect: 'postgresql',
-      host: process.env.SQL_HOST || '127.0.0.1',
-      database: process.env.SQL_DB_NAME || 'ai_studio_db',
+      host: connInfo.host,
+      database: connInfo.database,
       tables: ['wedding_settings', 'guests', 'wishes', 'gallery_photos', 'users'],
-      guestsCount: list.length,
+      tableCounts: counts,
+      guestsCount: counts.guests,
       syncedAt: new Date().toISOString()
     });
   } catch (err: any) {
     res.json({
       connected: false,
-      provider: 'Cloud SQL / PostgreSQL (Supabase Compatible)',
+      provider: connInfo.provider,
+      isExternalSupabase: connInfo.isExternalSupabase,
+      dialect: 'postgresql',
+      host: connInfo.host,
+      database: connInfo.database,
+      tables: ['wedding_settings', 'guests', 'wishes', 'gallery_photos', 'users'],
       error: err?.message || 'Database not connected',
       syncedAt: new Date().toISOString()
+    });
+  }
+});
+
+// Force synchronize all current application data to PostgreSQL / Supabase
+app.post('/api/admin/database-sync', async (req, res) => {
+  try {
+    await dbRepo.saveSettings(weddingSettings, 'main');
+    for (const [slug, wData] of weddingsMap.entries()) {
+      await dbRepo.saveSettings(wData, slug);
+    }
+    for (const g of guests) {
+      await dbRepo.upsertGuest(g);
+    }
+    for (const w of wishes) {
+      await dbRepo.upsertWish(w);
+    }
+    if (weddingSettings.galleries) {
+      for (const gal of weddingSettings.galleries) {
+        await dbRepo.upsertGallery(gal);
+      }
+    }
+    for (const u of adminUsers) {
+      await dbRepo.createDbUser({
+        uid: u.id,
+        username: u.username,
+        password: u.password,
+        email: u.email || `${u.username}@wedding.local`,
+        name: u.name,
+        role: u.role,
+        weddingSlug: u.weddingSlug,
+        coupleNames: u.coupleNames,
+        phone: u.phone,
+        notes: u.notes,
+        active: u.active,
+        createdBy: u.createdBy,
+        createdByName: u.createdByName
+      });
+    }
+
+    const counts = await dbRepo.getTableCounts();
+    const connInfo = getActiveConnectionInfo();
+    res.json({
+      success: true,
+      message: 'Seluruh data undangan, buku tamu, ucapan, galeri, dan akun Super Admin berhasil disinkronkan ke database PostgreSQL!',
+      tableCounts: counts,
+      provider: connInfo.provider,
+      syncedAt: new Date().toISOString()
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: err?.message || 'Gagal melakukan sinkronisasi ke database PostgreSQL.'
+    });
+  }
+});
+
+// Synchronize and verify managed Cloud SQL / Supabase connection
+app.post('/api/admin/supabase-connect', async (req, res) => {
+  try {
+    await initDatabaseData();
+    const counts = await dbRepo.getTableCounts();
+    const connInfo = getActiveConnectionInfo();
+
+    res.json({
+      success: true,
+      connected: true,
+      provider: connInfo.provider,
+      host: connInfo.host,
+      database: connInfo.database,
+      tableCounts: counts,
+      message: 'Berhasil menyinkronkan ke-5 tabel pada engine Cloud SQL PostgreSQL (asia-southeast1)!'
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: `Gagal menyinkronkan database: ${err?.message || 'Terjadi kesalahan koneksi'}`
     });
   }
 });
@@ -1880,6 +2049,42 @@ async function initDatabaseData() {
       }
     } catch (e) {
       // non fatal
+    }
+
+    // Sync users (Super Admins & Admin WOs)
+    try {
+      const dbUsers = await dbRepo.getAllUsers();
+      if (dbUsers && dbUsers.length > 0) {
+        for (const dbu of dbUsers) {
+          const existingIdx = adminUsers.findIndex(
+            u => u.id === dbu.id || u.username.toLowerCase() === dbu.username.toLowerCase()
+          );
+          if (existingIdx === -1) {
+            adminUsers.push(dbu);
+          } else if (dbu.password) {
+            adminUsers[existingIdx] = { ...adminUsers[existingIdx], ...dbu };
+          }
+        }
+      }
+      for (const u of adminUsers) {
+        await dbRepo.createDbUser({
+          uid: u.id,
+          username: u.username,
+          password: u.password,
+          email: u.email || `${u.username}@wedding.local`,
+          name: u.name,
+          role: u.role,
+          weddingSlug: u.weddingSlug,
+          coupleNames: u.coupleNames,
+          phone: u.phone,
+          notes: u.notes,
+          active: u.active,
+          createdBy: u.createdBy,
+          createdByName: u.createdByName
+        });
+      }
+    } catch (userErr) {
+      console.warn('[Database] User sync note:', userErr);
     }
 
     const dbGuests = await dbRepo.getAllGuests();

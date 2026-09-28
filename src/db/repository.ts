@@ -251,16 +251,24 @@ export async function deleteGallery(id: string): Promise<void> {
 }
 
 // ----------------- USERS -----------------
-export async function getAllUsers(): Promise<AdminUser[]> {
+export async function getAllUsers(): Promise<Array<AdminUser & { password?: string }>> {
   try {
     const list = await db.select().from(users).orderBy(desc(users.createdAt));
     return list.map(u => ({
-      id: `user-${u.id}`,
-      username: u.email.split('@')[0],
-      name: u.name || u.email.split('@')[0],
+      id: u.uid || `user-${u.id}`,
+      username: u.username || u.email.split('@')[0],
+      password: u.password || undefined,
+      name: u.name || u.username || u.email.split('@')[0],
       email: u.email,
-      role: u.role as AdminUser['role'],
-      active: true,
+      role: (u.role as AdminUser['role']) || 'admin',
+      weddingSlug: u.weddingSlug || undefined,
+      coupleNames: u.coupleNames || undefined,
+      phone: u.phone || undefined,
+      notes: u.notes || undefined,
+      active: u.active !== false,
+      createdBy: u.createdBy || undefined,
+      createdByName: u.createdByName || undefined,
+      isOwner: u.email?.toLowerCase() === 'asepsulistiyono1@gmail.com' || u.username?.toLowerCase() === 'asepsulistiyono1',
       createdAt: u.createdAt ? u.createdAt.toISOString() : new Date().toISOString()
     }));
   } catch (error) {
@@ -269,22 +277,54 @@ export async function getAllUsers(): Promise<AdminUser[]> {
   }
 }
 
-export async function createDbUser(user: { uid: string; email: string; name?: string; role?: string }): Promise<void> {
+export async function createDbUser(user: {
+  uid: string;
+  username?: string;
+  password?: string;
+  email: string;
+  name?: string;
+  role?: string;
+  weddingSlug?: string;
+  coupleNames?: string;
+  phone?: string;
+  notes?: string;
+  active?: boolean;
+  createdBy?: string;
+  createdByName?: string;
+}): Promise<void> {
   try {
     await db.insert(users)
       .values({
         uid: user.uid,
+        username: user.username || user.email.split('@')[0],
+        password: user.password || null,
         email: user.email,
-        name: user.name || user.email.split('@')[0],
+        name: user.name || user.username || user.email.split('@')[0],
         role: user.role || 'admin',
+        weddingSlug: user.weddingSlug || null,
+        coupleNames: user.coupleNames || null,
+        phone: user.phone || null,
+        notes: user.notes || null,
+        active: user.active !== false,
+        createdBy: user.createdBy || null,
+        createdByName: user.createdByName || null,
         createdAt: new Date()
       })
       .onConflictDoUpdate({
         target: users.uid,
         set: {
+          username: user.username || user.email.split('@')[0],
+          password: user.password || null,
           email: user.email,
-          name: user.name || user.email.split('@')[0],
-          role: user.role || 'admin'
+          name: user.name || user.username || user.email.split('@')[0],
+          role: user.role || 'admin',
+          weddingSlug: user.weddingSlug || null,
+          coupleNames: user.coupleNames || null,
+          phone: user.phone || null,
+          notes: user.notes || null,
+          active: user.active !== false,
+          createdBy: user.createdBy || null,
+          createdByName: user.createdByName || null
         }
       });
   } catch (error) {
@@ -299,4 +339,27 @@ export async function deleteDbUser(uid: string): Promise<void> {
   } catch (error) {
     console.error('Database query error in deleteDbUser:', error);
   }
+}
+
+export async function getTableCounts(): Promise<{
+  wedding_settings: number;
+  guests: number;
+  wishes: number;
+  gallery_photos: number;
+  users: number;
+}> {
+  const [settingsRows, guestsRows, wishesRows, galleryRows, usersRows] = await Promise.all([
+    db.select().from(weddingSettingsTable),
+    db.select().from(guests),
+    db.select().from(wishes),
+    db.select().from(galleryPhotos),
+    db.select().from(users),
+  ]);
+  return {
+    wedding_settings: settingsRows.length,
+    guests: guestsRows.length,
+    wishes: wishesRows.length,
+    gallery_photos: galleryRows.length,
+    users: usersRows.length,
+  };
 }

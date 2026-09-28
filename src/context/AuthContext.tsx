@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
+import { auth, googleAuthProvider } from '../lib/firebase.ts';
 import type { AdminUser } from '../types.ts';
 
 interface AuthContextType {
@@ -9,6 +11,7 @@ interface AuthContextType {
   isAdmin: boolean;
   isOwner: boolean;
   login: (usernameOrEmail: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  loginWithGoogle: () => Promise<{ success: boolean; error?: string }>;
   quickDemoLogin: (role: 'owner' | 'super_admin' | 'admin') => Promise<void>;
   logout: () => void;
 }
@@ -20,19 +23,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const saved = localStorage.getItem('wedding_auth_user');
     return saved ? JSON.parse(saved) : null;
   });
-  const [token, setToken] = useState<string | null>(() => {
-    return localStorage.getItem('wedding_auth_token');
-  });
+  // Store token in memory (never in localStorage) per security best practices
+  const [token, setToken] = useState<string | null>(null);
 
   useEffect(() => {
-    if (user && token) {
+    if (user) {
       localStorage.setItem('wedding_auth_user', JSON.stringify(user));
-      localStorage.setItem('wedding_auth_token', token);
     } else {
       localStorage.removeItem('wedding_auth_user');
-      localStorage.removeItem('wedding_auth_token');
     }
-  }, [user, token]);
+  }, [user]);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const idToken = await firebaseUser.getIdToken();
+          setToken(idToken);
+        } catch (err) {
+          console.error('Failed to get Firebase ID token:', err);
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   const login = async (usernameOrEmail: string, password: string) => {
     try {
@@ -58,6 +72,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const loginWithGoogle = async () => {
+    try {
+      const credential = await signInWithPopup(auth, googleAuthProvider);
+      const idToken = await credential.user.getIdToken();
+      setToken(idToken);
+
+      const res = await fetch('/api/auth/google', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Gagal verifikasi akun Google.' };
+      }
+
+      setUser(data.user);
+      return { success: true };
+    } catch (err: any) {
+      console.error('Google Sign-In error:', err);
+      return {
+        success: false,
+        error: err?.message || 'Gagal masuk menggunakan akun Google.',
+      };
+    }
+  };
+
   const quickDemoLogin = async (role: 'owner' | 'super_admin' | 'admin') => {
     if (role === 'owner') {
       await login('asepsulistiyono1', 'owner123');
@@ -69,6 +112,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
+    signOut(auth).catch(() => {});
     setUser(null);
     setToken(null);
   };
@@ -89,6 +133,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAdmin: user?.role === 'admin' || user?.role === 'super_admin' || isOwner,
         isOwner,
         login,
+        loginWithGoogle,
         quickDemoLogin,
         logout
       }}
