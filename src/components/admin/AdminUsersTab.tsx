@@ -29,7 +29,7 @@ import {
   EyeOff
 } from 'lucide-react';
 import type { AdminUser, UserRole } from '../../types.ts';
-import { useAuth } from '../../context/AuthContext.tsx';
+import { useAuth, getCachedAdminsList, saveCachedAdminUser } from '../../context/AuthContext.tsx';
 import { generateWeddingSlug, sanitizeSlug, getFullInvitationUrl } from '../../utils/slugHelper.ts';
 
 export const AdminUsersTab: React.FC = () => {
@@ -97,16 +97,24 @@ export const AdminUsersTab: React.FC = () => {
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
+        let loadedUsers: AdminUser[] = [];
         if (Array.isArray(data)) {
-          setUsers(data);
+          loadedUsers = data;
         } else if (data && Array.isArray(data.users)) {
-          setUsers(data.users);
+          loadedUsers = data.users;
         } else if (data && Array.isArray(data.admins)) {
-          setUsers(data.admins);
+          loadedUsers = data.admins;
+        }
+        if (loadedUsers.length > 0) {
+          setUsers(loadedUsers);
+          loadedUsers.forEach((u) => saveCachedAdminUser(u));
+          return;
         }
       }
+      setUsers(getCachedAdminsList());
     } catch (err) {
       console.error('Failed to fetch admin users:', err);
+      setUsers(getCachedAdminsList());
     } finally {
       setLoading(false);
     }
@@ -338,6 +346,10 @@ export const AdminUsersTab: React.FC = () => {
       if (!res.ok) {
         setErrorMsg(data.error || 'Gagal menambahkan user pengelola.');
       } else {
+        saveCachedAdminUser({
+          ...data.user,
+          password: password.trim(),
+        });
         setSuccessMsg(`Akun ${data.user.name} (@${data.user.username}) berhasil dibuat!`);
         setIsAddModalOpen(false);
         fetchUsers();
@@ -439,6 +451,10 @@ export const AdminUsersTab: React.FC = () => {
       if (!res.ok) {
         setPasswordFeedback({ type: 'error', message: data.error || 'Gagal mengubah kata sandi.' });
       } else {
+        saveCachedAdminUser({
+          ...activeTarget,
+          password: newPasswordInput,
+        });
         setPasswordFeedback({ type: 'success', message: 'Kata sandi berhasil diperbarui!' });
         fetchUsers();
         setTimeout(() => {

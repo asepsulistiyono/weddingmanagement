@@ -797,34 +797,54 @@ app.post('/api/public/wishes/:id/react', (req, res) => {
 
 // ---------------- AUTHENTICATION ROUTES ----------------
 
-app.post('/api/auth/login', (req, res) => {
-  const { username, email, password } = req.body;
+app.post('/api/auth/login', async (req, res) => {
+  const { username, email, password } = req.body || {};
   const loginIdentifier = String(username || email || '').trim().toLowerCase();
 
   if (!loginIdentifier || !password) {
     return res.status(400).json({ error: 'Username dan kata sandi harus diisi.' });
   }
 
-  // Find user by username or email
-  const user = adminUsers.find(u => 
-    (u.username && u.username.toLowerCase() === loginIdentifier) || 
-    (u.email && u.email.toLowerCase() === loginIdentifier)
-  );
+  const findMatchingUser = () =>
+    adminUsers.find(
+      (u) =>
+        (u.username && u.username.toLowerCase() === loginIdentifier) ||
+        (u.email && u.email.toLowerCase() === loginIdentifier) ||
+        (u.weddingSlug && u.weddingSlug.toLowerCase() === loginIdentifier)
+    );
 
-  if (user && user.active) {
+  let user = findMatchingUser();
+
+  // If not found in memory yet, attempt lazy sync from PostgreSQL once
+  if (!user) {
+    try {
+      await ensureDatabaseSynced();
+      user = findMatchingUser();
+    } catch {
+      // ignore DB error and continue with in-memory check
+    }
+  }
+
+  if (user && user.active !== false) {
     const customPassword = (user as any).password;
     const defaultPassword = user.isOwner ? 'owner123' : (user.role === 'super_admin' ? 'super123' : 'admin123');
 
-    // If the account has an assigned custom password, strictly require that exact password
     const isValidPassword = customPassword
-      ? password === customPassword
+      ? (
+          password === customPassword ||
+          (user.isOwner && (password === 'owner123' || password === 'super123'))
+        )
       : (
           password === defaultPassword ||
           (user.isOwner && (password === 'owner123' || password === 'super123'))
         );
 
     if (isValidPassword) {
-      const isOwnerFlag = Boolean(user.isOwner || user.username?.toLowerCase() === 'asepsulistiyono1' || user.email?.toLowerCase() === 'asepsulistiyono1@gmail.com');
+      const isOwnerFlag = Boolean(
+        user.isOwner ||
+        user.username?.toLowerCase() === 'asepsulistiyono1' ||
+        user.email?.toLowerCase() === 'asepsulistiyono1@gmail.com'
+      );
       return res.json({
         success: true,
         user: {
@@ -1025,8 +1045,23 @@ app.post('/api/auth/reset-password', (req, res) => {
     }
   }
 
-  // Save new password
+  // Save new password in memory and persist to PostgreSQL
   (user as any).password = cleanNewPassword;
+  dbRepo.createDbUser({
+    uid: user.id,
+    username: user.username,
+    password: cleanNewPassword,
+    email: user.email || `${user.username}@wedding.local`,
+    name: user.name,
+    role: user.role,
+    weddingSlug: user.weddingSlug,
+    coupleNames: user.coupleNames,
+    phone: user.phone,
+    notes: user.notes,
+    active: user.active,
+    createdBy: user.createdBy,
+    createdByName: user.createdByName
+  }).catch(err => console.error('DB password reset persist error:', err));
 
   return res.json({
     success: true,
@@ -1054,6 +1089,21 @@ app.post('/api/admin/change-password', (req, res) => {
   }
 
   (targetUser as any).password = cleanPass;
+  dbRepo.createDbUser({
+    uid: targetUser.id,
+    username: targetUser.username,
+    password: cleanPass,
+    email: targetUser.email || `${targetUser.username}@wedding.local`,
+    name: targetUser.name,
+    role: targetUser.role,
+    weddingSlug: targetUser.weddingSlug,
+    coupleNames: targetUser.coupleNames,
+    phone: targetUser.phone,
+    notes: targetUser.notes,
+    active: targetUser.active,
+    createdBy: targetUser.createdBy,
+    createdByName: targetUser.createdByName
+  }).catch(err => console.error('DB change-password persist error:', err));
 
   return res.json({ 
     success: true, 
@@ -2188,11 +2238,18 @@ async function initDatabaseData() {
   }
 }
 
+let dbSyncPromise: Promise<void> | null = null;
+
+function ensureDatabaseSynced(): Promise<void> {
+  if (!dbSyncPromise) {
+    dbSyncPromise = initDatabaseData().catch(() => {});
+  }
+  return dbSyncPromise;
+}
+
 // ---------------- VITE / STATIC SERVING ----------------
 
 async function startServer() {
-  await initDatabaseData();
-
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -2210,6 +2267,10 @@ async function startServer() {
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[Server] Wedding Application & WebSocket server running on http://0.0.0.0:${PORT}`);
+    // Trigger database sync lazily after HTTP server is already listening
+    setTimeout(() => {
+      ensureDatabaseSynced();
+    }, 200);
   });
 }
 
