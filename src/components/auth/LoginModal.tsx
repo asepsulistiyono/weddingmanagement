@@ -292,7 +292,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
               <form onSubmit={handleManualLogin} className="space-y-3">
                 <div>
                   <label className="block text-[11px] font-semibold text-stone-700 uppercase tracking-wider mb-1">
-                    Username Akun
+                    Username atau Email Akun
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
@@ -305,7 +305,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
                       autoCorrect="off"
                       value={username}
                       onChange={(e) => setUsername(e.target.value.toLowerCase().trim())}
-                      placeholder="Contoh: superadmin atau adminwo"
+                      placeholder="Username atau email (cth: superadmin)"
                       className="w-full pl-9 pr-3.5 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 text-stone-800 font-mono"
                     />
                   </div>

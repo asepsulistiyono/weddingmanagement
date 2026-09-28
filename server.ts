@@ -898,6 +898,74 @@ app.post('/api/auth/google', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+// Sync Supabase Auth session with PostgreSQL users table & AdminUser profile
+app.post('/api/auth/supabase-session', async (req, res) => {
+  try {
+    const { uid, email: rawEmail, name, role: requestedRole, weddingSlug } = req.body || {};
+    if (!uid && !rawEmail) {
+      return res.status(400).json({ error: 'Data sesi Supabase tidak lengkap.' });
+    }
+
+    const email = String(rawEmail || `${uid}@wedding.local`).trim().toLowerCase();
+    const usernameFromEmail = email.split('@')[0].toLowerCase();
+    const isOwnerAccount =
+      email === 'asepsulistiyono1@gmail.com' || usernameFromEmail === 'asepsulistiyono1';
+
+    const existingAdmin = adminUsers.find(
+      (u) =>
+        (u.email && u.email.toLowerCase() === email) ||
+        u.username.toLowerCase() === usernameFromEmail ||
+        u.id === uid
+    );
+
+    const resolvedRole: AdminUser['role'] = isOwnerAccount
+      ? 'super_admin'
+      : (existingAdmin?.role || requestedRole || 'super_admin');
+
+    const resolvedSlug = existingAdmin?.weddingSlug || weddingSlug || 'rizky_dan_siti';
+    const resolvedCoupleNames = existingAdmin?.coupleNames || 'Rizky & Siti';
+
+    await dbRepo.createDbUser({
+      uid: String(uid || existingAdmin?.id || `supa-${Date.now()}`),
+      username: existingAdmin?.username || usernameFromEmail,
+      email,
+      name: name || existingAdmin?.name || usernameFromEmail,
+      role: resolvedRole,
+      weddingSlug: resolvedSlug,
+      coupleNames: resolvedCoupleNames,
+      active: true,
+    });
+
+    const userRecord: AdminUser = existingAdmin || {
+      id: String(uid || `supa-${Date.now()}`),
+      username: usernameFromEmail,
+      name: name || usernameFromEmail,
+      email,
+      role: resolvedRole,
+      weddingSlug: resolvedSlug,
+      coupleNames: resolvedCoupleNames,
+      active: true,
+      isOwner: isOwnerAccount,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (!existingAdmin) {
+      adminUsers.push(userRecord);
+    }
+
+    return res.json({
+      success: true,
+      user: {
+        ...userRecord,
+        isOwner: isOwnerAccount || Boolean(userRecord.isOwner),
+      },
+    });
+  } catch (error: any) {
+    console.error('Failed to sync Supabase session:', error);
+    return res.status(500).json({ error: error.message || 'Gagal menyinkronkan sesi Supabase.' });
+  }
+});
+
 // Self-service password reset
 app.post('/api/auth/reset-password', (req, res) => {
   const { username, verificationEmail, securityPin, newPassword } = req.body;
