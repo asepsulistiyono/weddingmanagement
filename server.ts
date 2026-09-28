@@ -1701,25 +1701,34 @@ app.post('/api/superadmin/broadcast', (req, res) => {
 app.get(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
   const authHeader = req.headers.authorization || '';
   const queryUserId = String(req.query.userId || '').trim().toLowerCase();
+  const queryUsername = String(req.query.username || '').trim().toLowerCase();
 
   const callerUser = adminUsers.find(u => 
-    (u.id && u.id.toLowerCase() === queryUserId) || 
-    (u.username && u.username.toLowerCase() === queryUserId) ||
-    (u.email && u.email.toLowerCase() === queryUserId)
+    (queryUserId && u.id && u.id.toLowerCase() === queryUserId) || 
+    (queryUserId && u.username && u.username.toLowerCase() === queryUserId) ||
+    (queryUsername && u.username && u.username.toLowerCase() === queryUsername) ||
+    (queryUserId && u.email && u.email.toLowerCase() === queryUserId)
   );
 
-  const isOwnerCalling = 
-    authHeader.includes('owner') || 
+  const isOwnerCalling = Boolean(
     authHeader.includes('user-owner-1') ||
+    queryUserId === 'user-owner-1' ||
+    queryUserId === 'asepsulistiyono1' ||
+    queryUsername === 'asepsulistiyono1' ||
     callerUser?.isOwner ||
-    callerUser?.username === 'asepsulistiyono1';
+    callerUser?.username?.toLowerCase() === 'asepsulistiyono1' ||
+    callerUser?.email?.toLowerCase() === 'asepsulistiyono1@gmail.com'
+  );
 
-  // Jika yang memanggil adalah klien Super Admin biasa (mempelai), hanya tampilkan akunnya dan staf Admin WO miliknya
+  // Jika yang memanggil adalah klien Super Admin biasa (mempelai), hanya tampilkan akunnya sendiri dan staf Admin WO miliknya
   if (!isOwnerCalling && callerUser && callerUser.role === 'super_admin') {
     const callerSlug = callerUser.weddingSlug;
     const clientStaff = adminUsers
       .filter(u => 
-        !u.isOwner && (
+        !u.isOwner &&
+        u.username?.toLowerCase() !== 'asepsulistiyono1' &&
+        u.email?.toLowerCase() !== 'asepsulistiyono1@gmail.com' &&
+        (
           u.id === callerUser.id || 
           (u.role === 'admin' && (u.createdBy === callerUser.id || u.createdBy === callerUser.username || (callerSlug && u.weddingSlug === callerSlug)))
         )
@@ -1735,13 +1744,15 @@ app.get(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
   if (!isOwnerCalling && callerUser && callerUser.role === 'admin') {
     const callerSlug = callerUser.weddingSlug;
     const woColleagues = adminUsers.filter(u => 
-      !u.isOwner && u.weddingSlug === callerSlug
+      !u.isOwner &&
+      u.role === 'admin' &&
+      u.weddingSlug === callerSlug
     );
     return res.json(woColleagues);
   }
 
-  // Jika dipanggil oleh Owner: tampilkan seluruh ribuan Super Admin dan Admin WO di platform
-  // Sembunyikan akun Owner utama agar tetap incognito/terlindungi
+  // Jika dipanggil oleh Owner: tampilkan seluruh Super Admin dan Admin WO di platform
+  // Sembunyikan akun Owner utama agar tetap terlindungi
   const visibleUsers = adminUsers
     .filter(u => 
       !u.isOwner && 
@@ -1957,13 +1968,28 @@ app.delete(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], (req, re
     });
   }
 
-  // 2. Proteksi sesama Super Admin: Super Admin sekunder tidak bisa menghapus Super Admin lain
+  // 2. Proteksi sesama Super Admin: Super Admin TIDAK BISA menghapus Owner maupun Super Admin yang lain
   const authHeader = req.headers.authorization || '';
-  const isOwnerCalling = authHeader.includes('owner') || authHeader.includes('user-owner-1') || authHeader.includes('user-super-1');
+  const callerId = String(req.query.callerId || req.body?.callerId || '').trim().toLowerCase();
+  const callerUsername = String(req.query.callerUsername || req.body?.callerUsername || '').trim().toLowerCase();
+  const callerUser = adminUsers.find(
+    (u) =>
+      (callerId && u.id.toLowerCase() === callerId) ||
+      (callerUsername && u.username.toLowerCase() === callerUsername)
+  );
+
+  const isOwnerCalling = Boolean(
+    authHeader.includes('user-owner-1') ||
+    callerId === 'user-owner-1' ||
+    callerUsername === 'asepsulistiyono1' ||
+    callerUser?.isOwner ||
+    callerUser?.username?.toLowerCase() === 'asepsulistiyono1' ||
+    callerUser?.email?.toLowerCase() === 'asepsulistiyono1@gmail.com'
+  );
 
   if (adminToDelete.role === 'super_admin' && !isOwnerCalling) {
     return res.status(403).json({ 
-      error: 'DITOLAK: Hanya Pemilik Website Utama yang memiliki hak wewenang untuk menghapus akun Super Admin lain.' 
+      error: 'DITOLAK: Super Admin tidak memiliki kewenangan untuk menghapus Pemilik Website atau akun Super Admin yang lain.' 
     });
   }
 

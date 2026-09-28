@@ -93,7 +93,9 @@ export const AdminUsersTab: React.FC = () => {
 
   const fetchUsers = async () => {
     try {
-      const url = currentUser ? `/api/superadmin/users?userId=${encodeURIComponent(currentUser.id)}` : '/api/superadmin/users';
+      const url = currentUser
+        ? `/api/superadmin/users?userId=${encodeURIComponent(currentUser.id)}&username=${encodeURIComponent(currentUser.username || '')}`
+        : '/api/superadmin/users';
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
@@ -124,14 +126,55 @@ export const AdminUsersTab: React.FC = () => {
     fetchUsers();
   }, [currentUser]);
 
+  const isUserOwnerAccount = (u: AdminUser) =>
+    Boolean(
+      u.isOwner ||
+        u.username?.toLowerCase() === 'asepsulistiyono1' ||
+        u.email?.toLowerCase() === 'asepsulistiyono1@gmail.com'
+    );
+
+  // Strict RBAC scoping:
+  // - Never expose the Owner account in the deletable/manageable list
+  // - If logged in as a Super Admin (Mempelai) and NOT Owner, only show their own profile + their Admin WO staff
+  const scopedUsers = useMemo(() => {
+    return users.filter((u) => {
+      if (isUserOwnerAccount(u)) return false;
+      if (isOwner) return true;
+
+      const isSelf =
+        currentUser &&
+        (u.id === currentUser.id ||
+          (u.username &&
+            currentUser.username &&
+            u.username.toLowerCase() === currentUser.username.toLowerCase()));
+
+      if (isSelf) return true;
+
+      // Super Admin (Mempelai) can only see & manage Admin WO staff for their wedding, NEVER other Super Admins
+      if (u.role === 'admin') {
+        const sameCreator =
+          currentUser &&
+          (u.createdBy === currentUser.id ||
+            u.createdBy === currentUser.username);
+        const sameWedding =
+          currentUser?.weddingSlug &&
+          u.weddingSlug &&
+          u.weddingSlug.toLowerCase() === currentUser.weddingSlug.toLowerCase();
+        return Boolean(sameCreator || sameWedding);
+      }
+
+      return false;
+    });
+  }, [users, isOwner, currentUser]);
+
   // Statistics
-  const totalSuperAdmins = useMemo(() => users.filter(u => u.role === 'super_admin' && !u.isOwner).length, [users]);
-  const totalAdminWOs = useMemo(() => users.filter(u => u.role === 'admin' && !u.isOwner).length, [users]);
-  const activeUsersCount = useMemo(() => users.filter(u => u.active !== false).length, [users]);
+  const totalSuperAdmins = useMemo(() => scopedUsers.filter(u => u.role === 'super_admin' && !isUserOwnerAccount(u)).length, [scopedUsers]);
+  const totalAdminWOs = useMemo(() => scopedUsers.filter(u => u.role === 'admin' && !isUserOwnerAccount(u)).length, [scopedUsers]);
+  const activeUsersCount = useMemo(() => scopedUsers.filter(u => u.active !== false).length, [scopedUsers]);
 
   // Filtered Users List
   const filteredUsers = useMemo(() => {
-    return users.filter(u => {
+    return scopedUsers.filter(u => {
       // Role filter
       if (roleFilter !== 'all' && u.role !== roleFilter) return false;
 
@@ -155,7 +198,7 @@ export const AdminUsersTab: React.FC = () => {
 
       return true;
     });
-  }, [users, roleFilter, statusFilter, searchQuery]);
+  }, [scopedUsers, roleFilter, statusFilter, searchQuery]);
 
   // Password Generator
   const generateRandomPassword = () => {
@@ -288,13 +331,24 @@ export const AdminUsersTab: React.FC = () => {
 
   // Toggle user active status
   const handleToggleUserStatus = async (user: AdminUser) => {
+    if (isUserOwnerAccount(user)) {
+      setErrorMsg('Ditolak: Akun Pemilik Website Utama tidak dapat dinonaktifkan.');
+      return;
+    }
+    if (!isOwner && user.role === 'super_admin') {
+      setErrorMsg('Ditolak: Super Admin tidak memiliki kewenangan mengubah status akun Super Admin lain.');
+      return;
+    }
     const newStatus = user.active === false ? true : false;
     try {
-      const res = await fetch(`/api/superadmin/users/${user.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ active: newStatus })
-      });
+      const res = await fetch(
+        `/api/superadmin/users/${user.id}?callerId=${encodeURIComponent(currentUser?.id || '')}&callerUsername=${encodeURIComponent(currentUser?.username || '')}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ active: newStatus })
+        }
+      );
       if (res.ok) {
         setSuccessMsg(`Status akun @${user.username} berhasil diubah menjadi ${newStatus ? 'Aktif' : 'Nonaktif'}.`);
         fetchUsers();
@@ -372,17 +426,22 @@ export const AdminUsersTab: React.FC = () => {
     }
   };
 
-  // Delete User with Cascade Delete
+  // Delete User with Cascade Delete & Strict Role Protection
   const handleDeleteUser = async (user: AdminUser) => {
-    if (user.email?.toLowerCase() === 'asepsulistiyono1@gmail.com' || user.username?.toLowerCase() === 'asepsulistiyono1') {
-      alert('Akun Pemilik Website Utama memiliki proteksi absolut dan tidak dapat dihapus.');
+    if (isUserOwnerAccount(user)) {
+      setErrorMsg('Ditolak: Akun Pemilik Website Utama memiliki proteksi absolut dan tidak dapat dihapus.');
+      return;
+    }
+
+    if (!isOwner && user.role === 'super_admin') {
+      setErrorMsg('Ditolak: Super Admin tidak memiliki kewenangan untuk menghapus Pemilik Website atau akun Super Admin yang lain.');
       return;
     }
 
     if (user.role === 'super_admin') {
       const relatedAdminWOs = users.filter(u => 
         u.role === 'admin' && 
-        !u.isOwner && 
+        !isUserOwnerAccount(u) && 
         (
           u.createdBy === user.id || 
           u.createdBy === user.username || 
@@ -402,10 +461,13 @@ export const AdminUsersTab: React.FC = () => {
     }
 
     try {
-      const res = await fetch(`/api/superadmin/users/${user.id}`, { method: 'DELETE' });
+      const res = await fetch(
+        `/api/superadmin/users/${user.id}?callerId=${encodeURIComponent(currentUser?.id || '')}&callerUsername=${encodeURIComponent(currentUser?.username || '')}`,
+        { method: 'DELETE' }
+      );
       const data = await res.json();
       if (!res.ok) {
-        alert(data.error || 'Gagal menghapus pengelola.');
+        setErrorMsg(data.error || 'Gagal menghapus pengelola.');
       } else {
         setSuccessMsg(data.message || `Akun ${user.name} berhasil dihapus.`);
         fetchUsers();
@@ -413,7 +475,7 @@ export const AdminUsersTab: React.FC = () => {
       }
     } catch (err) {
       console.error('Failed to delete user:', err);
-      alert('Terjadi kesalahan jaringan.');
+      setErrorMsg('Terjadi kesalahan jaringan.');
     }
   };
 
@@ -687,18 +749,20 @@ export const AdminUsersTab: React.FC = () => {
                 roleFilter === 'all' ? 'bg-white text-stone-900 shadow-2xs' : 'text-stone-600 hover:text-stone-900'
               }`}
             >
-              Semua ({users.length})
+              Semua ({scopedUsers.length})
             </button>
-            <button
-              type="button"
-              onClick={() => setRoleFilter('super_admin')}
-              className={`px-3 py-1.5 rounded-lg font-semibold transition-colors cursor-pointer flex items-center gap-1 ${
-                roleFilter === 'super_admin' ? 'bg-white text-amber-900 shadow-2xs font-bold' : 'text-stone-600 hover:text-stone-900'
-              }`}
-            >
-              <Crown className="w-3.5 h-3.5 text-amber-700" />
-              <span>Super Admin ({totalSuperAdmins})</span>
-            </button>
+            {isOwner && (
+              <button
+                type="button"
+                onClick={() => setRoleFilter('super_admin')}
+                className={`px-3 py-1.5 rounded-lg font-semibold transition-colors cursor-pointer flex items-center gap-1 ${
+                  roleFilter === 'super_admin' ? 'bg-white text-amber-900 shadow-2xs font-bold' : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                <Crown className="w-3.5 h-3.5 text-amber-700" />
+                <span>Super Admin ({totalSuperAdmins})</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setRoleFilter('admin')}
@@ -760,10 +824,29 @@ export const AdminUsersTab: React.FC = () => {
 
               {!loading &&
                 filteredUsers.map((item) => {
-                  const isCurrentSelf = currentUser?.id === item.id;
+                  const isCurrentSelf = Boolean(
+                    currentUser &&
+                      (currentUser.id === item.id ||
+                        (currentUser.username &&
+                          item.username &&
+                          currentUser.username.toLowerCase() === item.username.toLowerCase()))
+                  );
+                  const isItemOwner = isUserOwnerAccount(item);
+                  const canDeleteThisUser =
+                    !isCurrentSelf &&
+                    !isItemOwner &&
+                    (isOwner || item.role === 'admin');
+                  const canToggleThisUser =
+                    !isCurrentSelf &&
+                    !isItemOwner &&
+                    (isOwner || item.role === 'admin');
+                  const canEditOrResetThisUser =
+                    !isItemOwner &&
+                    (isOwner || isCurrentSelf || item.role === 'admin');
+
                   const isUserActive = item.active !== false;
                   const targetSlug = item.weddingSlug || 'default';
-                  const relatedStaffCount = users.filter(u => u.role === 'admin' && (u.createdBy === item.id || (item.weddingSlug && u.weddingSlug === item.weddingSlug))).length;
+                  const relatedStaffCount = scopedUsers.filter(u => u.role === 'admin' && (u.createdBy === item.id || (item.weddingSlug && u.weddingSlug === item.weddingSlug))).length;
 
                   return (
                     <tr key={item.id} className={`hover:bg-amber-50/20 transition-colors ${!isUserActive ? 'opacity-50 bg-stone-50/60' : ''}`}>
@@ -771,14 +854,22 @@ export const AdminUsersTab: React.FC = () => {
                       <td className="py-3.5 px-4 text-center">
                         <button
                           type="button"
-                          disabled={isCurrentSelf}
-                          onClick={() => handleToggleUserStatus(item)}
-                          className={`w-7 h-7 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
-                            isUserActive 
-                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' 
-                              : 'bg-stone-200 text-stone-500 hover:bg-stone-300'
+                          disabled={!canToggleThisUser}
+                          onClick={() => canToggleThisUser && handleToggleUserStatus(item)}
+                          className={`w-7 h-7 rounded-full flex items-center justify-center transition-colors ${
+                            !canToggleThisUser
+                              ? 'bg-stone-100 text-stone-300 cursor-not-allowed'
+                              : isUserActive 
+                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 cursor-pointer' 
+                              : 'bg-stone-200 text-stone-500 hover:bg-stone-300 cursor-pointer'
                           }`}
-                          title={isUserActive ? 'Akun Aktif (Klik untuk nonaktifkan)' : 'Akun Nonaktif (Klik untuk aktifkan)'}
+                          title={
+                            !canToggleThisUser
+                              ? 'Akun ini tidak dapat dinonaktifkan'
+                              : isUserActive
+                              ? 'Akun Aktif (Klik untuk nonaktifkan)'
+                              : 'Akun Nonaktif (Klik untuk aktifkan)'
+                          }
                         >
                           <Power className="w-3.5 h-3.5" />
                         </button>
@@ -961,7 +1052,7 @@ export const AdminUsersTab: React.FC = () => {
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           {/* Share Credentials via WhatsApp */}
-                          {item.role === 'super_admin' && (
+                          {item.role === 'super_admin' && (isOwner || isCurrentSelf) && (
                             <button
                               type="button"
                               onClick={() => setShareUser(item)}
@@ -974,7 +1065,7 @@ export const AdminUsersTab: React.FC = () => {
                           )}
 
                           {/* Edit Details & URL */}
-                          {item.role === 'super_admin' && (
+                          {item.role === 'super_admin' && (isOwner || isCurrentSelf) && (
                             <button
                               type="button"
                               onClick={() => handleOpenEditModal(item)}
@@ -987,25 +1078,27 @@ export const AdminUsersTab: React.FC = () => {
                           )}
 
                           {/* Reset Password */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setTargetUserToReset(item);
-                              setIsPasswordModalOpen(true);
-                              setPasswordFeedback(null);
-                              setNewPasswordInput('');
-                              setConfirmPasswordInput('');
-                              setCopiedResetCreds(false);
-                            }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-stone-700 hover:text-stone-900 bg-stone-100 hover:bg-stone-200 rounded-lg transition-colors cursor-pointer border border-stone-200"
-                            title={`Reset kata sandi untuk @${item.username}`}
-                          >
-                            <KeyRound className="w-3.5 h-3.5 text-stone-600" />
-                            <span className="text-[11px] font-semibold">Sandi</span>
-                          </button>
+                          {canEditOrResetThisUser && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTargetUserToReset(item);
+                                setIsPasswordModalOpen(true);
+                                setPasswordFeedback(null);
+                                setNewPasswordInput('');
+                                setConfirmPasswordInput('');
+                                setCopiedResetCreds(false);
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-stone-700 hover:text-stone-900 bg-stone-100 hover:bg-stone-200 rounded-lg transition-colors cursor-pointer border border-stone-200"
+                              title={`Reset kata sandi untuk @${item.username}`}
+                            >
+                              <KeyRound className="w-3.5 h-3.5 text-stone-600" />
+                              <span className="text-[11px] font-semibold">Sandi</span>
+                            </button>
+                          )}
 
-                          {/* Delete User */}
-                          {!isCurrentSelf && (
+                          {/* Delete User: Super Admin can ONLY delete their own Admin WO staff, NEVER Owner or other Super Admins */}
+                          {canDeleteThisUser && (
                             <button
                               type="button"
                               onClick={() => handleDeleteUser(item)}
