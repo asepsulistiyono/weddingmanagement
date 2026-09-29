@@ -1529,18 +1529,23 @@ app.get('/api/admin/export/guests', (req, res) => {
 
 // Get all galleries (public)
 app.get('/api/public/gallery', (req, res) => {
+  const slug = (req.query.slug as string) || undefined;
+  const activeSettings = getWedding(slug);
   res.json({
     success: true,
-    galleries: weddingSettings.galleries || []
+    galleries: activeSettings.galleries || []
   });
 });
 
 // Admin add new photo to gallery
 app.post('/api/admin/gallery', (req, res) => {
-  const { url, caption, category, isFeatured } = req.body;
+  const { url, caption, category, isFeatured, slug } = req.body;
   if (!url) {
     return res.status(400).json({ error: 'Foto atau URL gambar wajib diisi.' });
   }
+
+  const activeSettings = getWedding(slug);
+  const targetSlug = activeSettings.slug || (slug ? sanitizeSlug(slug) : 'default');
 
   const newPhoto: GalleryPhoto = {
     id: `gal-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
@@ -1551,67 +1556,77 @@ app.post('/api/admin/gallery', (req, res) => {
     uploadedAt: new Date().toISOString()
   };
 
-  if (!weddingSettings.galleries) {
-    weddingSettings.galleries = [];
+  if (!activeSettings.galleries) {
+    activeSettings.galleries = [];
   }
 
-  weddingSettings.galleries.unshift(newPhoto);
+  activeSettings.galleries.unshift(newPhoto);
+  weddingsMap.set(targetSlug, activeSettings);
   dbRepo.upsertGallery(newPhoto).catch(err => console.error('DB Gallery add error:', err));
-  dbRepo.saveSettings(weddingSettings).catch(err => console.error('DB Settings save error:', err));
+  dbRepo.saveSettings(activeSettings, targetSlug).catch(err => console.error('DB Settings save error:', err));
 
   broadcast({
     type: 'GALLERY_UPDATED',
-    payload: weddingSettings.galleries
+    payload: activeSettings.galleries
   });
 
   broadcast({
     type: 'SETTINGS_UPDATED',
-    payload: weddingSettings
+    payload: activeSettings
   });
 
-  res.status(201).json({ success: true, photo: newPhoto, galleries: weddingSettings.galleries });
+  res.status(201).json({ success: true, photo: newPhoto, galleries: activeSettings.galleries });
 });
 
 // Admin update photo details
 app.put('/api/admin/gallery/:id', (req, res) => {
-  const photo = (weddingSettings.galleries || []).find(p => p.id === req.params.id);
+  const { caption, category, isFeatured, url, slug } = req.body;
+  const activeSettings = getWedding(slug);
+  const targetSlug = activeSettings.slug || (slug ? sanitizeSlug(slug) : 'default');
+
+  const photo = (activeSettings.galleries || []).find(p => p.id === req.params.id);
   if (!photo) {
     return res.status(404).json({ error: 'Foto tidak ditemukan.' });
   }
 
-  const { caption, category, isFeatured, url } = req.body;
   if (url !== undefined) photo.url = String(url).trim();
   if (caption !== undefined) photo.caption = String(caption).trim();
   if (category !== undefined) photo.category = category;
   if (isFeatured !== undefined) photo.isFeatured = Boolean(isFeatured);
 
+  weddingsMap.set(targetSlug, activeSettings);
   dbRepo.upsertGallery(photo).catch(err => console.error('DB Gallery update error:', err));
-  dbRepo.saveSettings(weddingSettings).catch(err => console.error('DB Settings save error:', err));
+  dbRepo.saveSettings(activeSettings, targetSlug).catch(err => console.error('DB Settings save error:', err));
 
   broadcast({
     type: 'GALLERY_UPDATED',
-    payload: weddingSettings.galleries
+    payload: activeSettings.galleries
   });
 
   broadcast({
     type: 'SETTINGS_UPDATED',
-    payload: weddingSettings
+    payload: activeSettings
   });
 
-  res.json({ success: true, photo, galleries: weddingSettings.galleries });
+  res.json({ success: true, photo, galleries: activeSettings.galleries });
 });
 
 // Admin delete photo
 app.delete('/api/admin/gallery/:id', (req, res) => {
-  const galleries = weddingSettings.galleries || [];
+  const slug = (req.query.slug as string) || (req.body && req.body.slug);
+  const activeSettings = getWedding(slug);
+  const targetSlug = activeSettings.slug || (slug ? sanitizeSlug(slug) : 'default');
+
+  const galleries = activeSettings.galleries || [];
   const index = galleries.findIndex(p => p.id === req.params.id);
   if (index === -1) {
     return res.status(404).json({ error: 'Foto tidak ditemukan.' });
   }
 
   galleries.splice(index, 1);
+  weddingsMap.set(targetSlug, activeSettings);
   dbRepo.deleteGallery(req.params.id).catch(err => console.error('DB Gallery delete error:', err));
-  dbRepo.saveSettings(weddingSettings).catch(err => console.error('DB Settings save error:', err));
+  dbRepo.saveSettings(activeSettings, targetSlug).catch(err => console.error('DB Settings save error:', err));
 
   broadcast({
     type: 'GALLERY_UPDATED',
@@ -1620,7 +1635,7 @@ app.delete('/api/admin/gallery/:id', (req, res) => {
 
   broadcast({
     type: 'SETTINGS_UPDATED',
-    payload: weddingSettings
+    payload: activeSettings
   });
 
   res.json({ success: true, galleries });
@@ -1707,9 +1722,12 @@ app.put('/api/superadmin/settings', (req, res) => {
 
 // Real-time broadcast announcement to all live viewers
 app.post('/api/superadmin/broadcast', (req, res) => {
-  const { message, active } = req.body;
+  const { message, active, slug } = req.body;
+  const activeSettings = getWedding(slug);
+  const targetSlug = activeSettings.slug || (slug ? sanitizeSlug(slug) : 'default');
+
   if (message && active) {
-    weddingSettings.announcement = {
+    activeSettings.announcement = {
       id: `ann-${Date.now()}`,
       message: String(message),
       active: true,
@@ -1720,15 +1738,18 @@ app.post('/api/superadmin/broadcast', (req, res) => {
       payload: { message: String(message), timestamp: new Date().toISOString() }
     });
   } else {
-    weddingSettings.announcement = null;
+    activeSettings.announcement = null;
   }
+
+  weddingsMap.set(targetSlug, activeSettings);
+  dbRepo.saveSettings(activeSettings, targetSlug).catch(err => console.error('DB Broadcast save error:', err));
 
   broadcast({
     type: 'SETTINGS_UPDATED',
-    payload: weddingSettings
+    payload: activeSettings
   });
 
-  res.json({ success: true, announcement: weddingSettings.announcement });
+  res.json({ success: true, announcement: activeSettings.announcement });
 });
 
 // Super Admin & Owner: List admins / users

@@ -21,6 +21,7 @@ interface RealtimeContextType {
   refreshData: () => Promise<void>;
   fetchGuests: () => Promise<void>;
   refreshAll: () => Promise<void>;
+  updateSettingsDirectly: (newSettings: WeddingSettings) => void;
   newWishAlert: Wish | null;
   clearNewWishAlert: () => void;
 }
@@ -139,9 +140,27 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, []);
 
-  const refreshData = useCallback(async () => {
+  const updateSettingsDirectly = useCallback((newSettings: WeddingSettings) => {
+    setSettings(newSettings);
+    settingsRef.current = newSettings;
+    if (newSettings.announcement !== undefined) {
+      setAnnouncement(newSettings.announcement);
+    }
     try {
-      const { weddingSlug, guestSlug } = resolveActiveWeddingSlug();
+      const slugKey = newSettings.slug || resolveActiveWeddingSlug().weddingSlug || 'default';
+      localStorage.setItem(`wedding_settings_cache_${slugKey}`, JSON.stringify(newSettings));
+      if (newSettings.slug) {
+        sessionStorage.setItem('wedding_active_slug', newSettings.slug);
+      }
+    } catch {
+      // ignore storage quota errors
+    }
+  }, []);
+
+  const refreshData = useCallback(async () => {
+    const { weddingSlug, guestSlug } = resolveActiveWeddingSlug();
+    const slugKey = weddingSlug || 'default';
+    try {
       const params = new URLSearchParams();
       if (weddingSlug) params.set('slug', weddingSlug);
       if (guestSlug) params.set('guest', guestSlug);
@@ -152,18 +171,51 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
-        setSettings(data.settings);
-        settingsRef.current = data.settings;
-        setWishes(localizeWishesList(data.wishes || [], data.settings, weddingSlug));
+        let resolvedSettings: WeddingSettings = data.settings;
+        try {
+          const cachedRaw = localStorage.getItem(`wedding_settings_cache_${slugKey}`);
+          if (cachedRaw) {
+            const cached = JSON.parse(cachedRaw) as WeddingSettings;
+            // If server returned uncustomized default template while local cache has user's saved customizations for this slug, merge them
+            if (cached && (!cached.slug || cached.slug === slugKey || cached.slug === resolvedSettings?.slug)) {
+              resolvedSettings = {
+                ...resolvedSettings,
+                ...cached,
+                galleries:
+                  (resolvedSettings?.galleries && resolvedSettings.galleries.length > 0)
+                    ? resolvedSettings.galleries
+                    : cached.galleries || [],
+              };
+            }
+          }
+        } catch {
+          // ignore cache parse error
+        }
+        setSettings(resolvedSettings);
+        settingsRef.current = resolvedSettings;
+        setWishes(localizeWishesList(data.wishes || [], resolvedSettings, weddingSlug));
         if (data.guest) {
           setGuest(data.guest);
         }
-        if (data.settings?.announcement) {
-          setAnnouncement(data.settings.announcement);
+        if (resolvedSettings?.announcement) {
+          setAnnouncement(resolvedSettings.announcement);
         }
+        return;
       }
     } catch (err) {
       console.error('Failed to fetch public wedding data:', err);
+    }
+
+    // Fallback to cached settings if server is temporarily unreachable
+    try {
+      const cachedRaw = localStorage.getItem(`wedding_settings_cache_${slugKey}`);
+      if (cachedRaw) {
+        const cached = JSON.parse(cachedRaw) as WeddingSettings;
+        setSettings(cached);
+        settingsRef.current = cached;
+      }
+    } catch {
+      // ignore
     }
   }, []);
 
@@ -230,6 +282,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // WebSocket real-time connection
   useEffect(() => {
     refreshData();
+    fetchGuests();
 
     const connectWebSocket = () => {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -285,8 +338,17 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 break;
 
               case 'SETTINGS_UPDATED':
-                setSettings(data.payload);
-                setAnnouncement(data.payload.announcement || null);
+                if (!currentSlug || !data.payload?.slug || data.payload.slug === currentSlug) {
+                  setSettings(data.payload);
+                  settingsRef.current = data.payload;
+                  setAnnouncement(data.payload.announcement || null);
+                  try {
+                    const slugKey = data.payload.slug || currentSlug || 'default';
+                    localStorage.setItem(`wedding_settings_cache_${slugKey}`, JSON.stringify(data.payload));
+                  } catch {
+                    // ignore
+                  }
+                }
                 break;
 
               case 'GALLERY_UPDATED':
@@ -451,6 +513,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         refreshData,
         fetchGuests,
         refreshAll,
+        updateSettingsDirectly,
         newWishAlert,
         clearNewWishAlert
       }}

@@ -79,6 +79,9 @@ export const AdminUsersTab: React.FC = () => {
   const [shareUser, setShareUser] = useState<AdminUser | null>(null);
   const [copiedWaText, setCopiedWaText] = useState(false);
 
+  // Delete User Confirmation Modal State
+  const [userToDelete, setUserToDelete] = useState<AdminUser | null>(null);
+
   // Password Reset Modal State
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [targetUserToReset, setTargetUserToReset] = useState<AdminUser | null>(null);
@@ -564,7 +567,7 @@ export const AdminUsersTab: React.FC = () => {
   };
 
   // Delete User with Cascade Delete & Strict Role Protection
-  const handleDeleteUser = async (user: AdminUser) => {
+  const handleDeleteUser = (user: AdminUser) => {
     if (isUserOwnerAccount(user)) {
       setErrorMsg('Ditolak: Akun Pemilik Website Utama memiliki proteksi absolut dan tidak dapat dihapus.');
       return;
@@ -575,27 +578,13 @@ export const AdminUsersTab: React.FC = () => {
       return;
     }
 
-    if (user.role === 'super_admin') {
-      const relatedAdminWOs = users.filter(u => 
-        u.role === 'admin' && 
-        !isUserOwnerAccount(u) && 
-        (
-          u.createdBy === user.id || 
-          u.createdBy === user.username || 
-          (user.weddingSlug && u.weddingSlug === user.weddingSlug)
-        )
-      );
+    setUserToDelete(user);
+  };
 
-      let confirmMsg = `Hapus akun Super Admin "${user.name}" (@${user.username})?`;
-      if (relatedAdminWOs.length > 0) {
-        const woList = relatedAdminWOs.map(w => `• @${w.username} (${w.name})`).join('\n');
-        confirmMsg = `⚠️ PERHATIAN: PENGHAPUSAN OTOMATIS BERUNTUN (CASCADE)\n\nMenghapus Super Admin "${user.name}" (@${user.username}) juga akan OTOMATIS MENGHAPUS ${relatedAdminWOs.length} akun Admin WO (staf resepsi) yang dibuat di bawahnya:\n\n${woList}\n\nApakah Anda yakin ingin menghapus Super Admin beserta seluruh Admin WO tersebut?`;
-      }
-
-      if (!confirm(confirmMsg)) return;
-    } else {
-      if (!confirm(`Hapus akses pengelola untuk Admin WO ${user.name} (@${user.username})?`)) return;
-    }
+  const executeConfirmDeleteUser = async () => {
+    if (!userToDelete) return;
+    const user = userToDelete;
+    setUserToDelete(null);
 
     try {
       const res = await fetch(
@@ -626,6 +615,26 @@ export const AdminUsersTab: React.FC = () => {
       setSuccessMsg(`Akun ${user.name} berhasil dihapus.`);
       setTimeout(() => setSuccessMsg(null), 5000);
     }
+  };
+
+  const handleExportUsersCsv = () => {
+    let csv = 'Nama Mempelai / Akun,Username,Password,Role,URL Slug,WhatsApp,Catatan\n';
+    users
+      .filter((u) => !isUserOwnerAccount(u))
+      .forEach((u) => {
+        const cleanName = `"${(u.coupleNames || u.name || '').replace(/"/g, '""')}"`;
+        const cleanNotes = `"${(u.notes || '').replace(/"/g, '""')}"`;
+        csv += `${cleanName},${u.username},${u.password || (u.role === 'super_admin' ? 'super123' : 'admin123')},${u.role},${u.weddingSlug || '-'},${u.phone || '-'},${cleanNotes}\n`;
+      });
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'daftar_klien_superadmin_mempelai.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // Change Password
@@ -732,15 +741,15 @@ export const AdminUsersTab: React.FC = () => {
 
           {isOwner ? (
             <>
-              <a
-                href="/api/superadmin/export/users"
-                download="daftar_klien_superadmin_mempelai.csv"
+              <button
+                type="button"
+                onClick={handleExportUsersCsv}
                 className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs sm:text-sm font-semibold transition-colors cursor-pointer border border-stone-200 shadow-2xs"
                 title="Unduh seluruh daftar kredensial dan URL klien Super Admin dalam format CSV / Excel"
               >
                 <Download className="w-4 h-4 text-stone-600" />
                 <span className="hidden sm:inline">Ekspor CSV</span>
-              </a>
+              </button>
 
               <button
                 onClick={() => handleOpenAddModal('super_admin')}
@@ -2014,6 +2023,51 @@ export const AdminUsersTab: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete User Confirmation Modal */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 border border-stone-200 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-serif-wedding text-xl font-bold text-stone-900">
+                  Konfirmasi Hapus Akun
+                </h4>
+                <p className="text-xs text-stone-500">
+                  @{userToDelete.username} ({userToDelete.coupleNames || userToDelete.name})
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs sm:text-sm text-stone-700 leading-relaxed">
+              Apakah Anda yakin ingin menghapus akses pengelola untuk{' '}
+              <strong>{userToDelete.coupleNames || userToDelete.name}</strong> (@{userToDelete.username})?
+              {userToDelete.role === 'super_admin' &&
+                ' Seluruh akun staf Admin WO di bawah undangan ini juga akan ikut dihapus.'}
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-100">
+              <button
+                type="button"
+                onClick={() => setUserToDelete(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-stone-600 hover:bg-stone-100 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={executeConfirmDeleteUser}
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer shadow-xs"
+              >
+                Ya, Hapus Akun
+              </button>
+            </div>
           </div>
         </div>
       )}

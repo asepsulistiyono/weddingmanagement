@@ -68,12 +68,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToInvitati
     }
   }, [activeTab, isOwner, isSuperAdmin]);
 
+  React.useEffect(() => {
+    if (isAuthenticated && user) {
+      refreshAll();
+    }
+  }, [isAuthenticated, user?.id, user?.weddingSlug, refreshAll]);
+
   if (!isAuthenticated || !user) {
     return null;
   }
 
   // Computed summary metrics
-  const coupleTitle = settings ? (settings.coupleNames || `${settings.groom.nickname} & ${settings.bride.nickname}`) : 'Rizky & Siti';
+  const coupleTitle =
+    settings && (isOwner || !user.weddingSlug || settings.slug === user.weddingSlug)
+      ? settings.coupleNames || `${settings.groom.nickname} & ${settings.bride.nickname}`
+      : user.coupleNames || 'Rizky & Siti';
   const totalGuests = guests.length;
   const attendingGuests = guests.filter((g: Guest) => g.rsvpStatus === 'attending');
   const notAttendingGuests = guests.filter((g: Guest) => g.rsvpStatus === 'not_attending');
@@ -679,6 +688,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToInvitati
           <SettingsTab
             settings={settings}
             onRefresh={refreshAll}
+            onOpenPublicInvitation={onBackToInvitation}
           />
         )}
 

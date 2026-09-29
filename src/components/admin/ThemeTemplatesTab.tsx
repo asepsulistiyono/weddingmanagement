@@ -18,7 +18,9 @@ import {
   type WeddingThemeTemplate,
   type ThemeCategory
 } from '../../utils/themeTemplates.ts';
-import { getFullInvitationUrl, generateWeddingSlug } from '../../utils/slugHelper.ts';
+import { getFullInvitationUrl, generateWeddingSlug, sanitizeSlug } from '../../utils/slugHelper.ts';
+import { useRealtime } from '../../context/RealtimeContext.tsx';
+import { useAuth } from '../../context/AuthContext.tsx';
 
 interface ThemeTemplatesTabProps {
   settings: WeddingSettings | null;
@@ -39,6 +41,8 @@ export const ThemeTemplatesTab: React.FC<ThemeTemplatesTabProps> = ({
   onRefresh,
   onOpenPublicInvitation
 }) => {
+  const { updateSettingsDirectly } = useRealtime();
+  const { user } = useAuth();
   const currentThemeId: ThemeTemplateId = settings?.themeTemplateId || 'royal-javanese-gold';
   const activeTheme = getThemeById(currentThemeId);
 
@@ -51,7 +55,10 @@ export const ThemeTemplatesTab: React.FC<ThemeTemplatesTabProps> = ({
   const brideName = settings?.bride?.nickname || 'Siti';
   const coupleDisplay = `${groomName} & ${brideName}`;
   const activeSlug =
-    settings?.slug || generateWeddingSlug(groomName, brideName) || 'rizky_dan_siti';
+    (!user?.isOwner && user?.weddingSlug ? sanitizeSlug(user.weddingSlug) : null) ||
+    settings?.slug ||
+    generateWeddingSlug(groomName, brideName) ||
+    'rizky_dan_siti';
 
   const filteredThemes =
     selectedCategory === 'Semua'
@@ -65,8 +72,12 @@ export const ThemeTemplatesTab: React.FC<ThemeTemplatesTabProps> = ({
 
     const updated: WeddingSettings = {
       ...settings,
+      slug: activeSlug,
       themeTemplateId: theme.id
     };
+
+    // Immediately update state and local cache so theme persists
+    updateSettingsDirectly(updated);
 
     try {
       const res = await fetch('/api/superadmin/settings', {
@@ -80,17 +91,28 @@ export const ThemeTemplatesTab: React.FC<ThemeTemplatesTabProps> = ({
       });
 
       if (res.ok) {
-        setSuccessBanner(
-          `Tema "${theme.number}. ${theme.name}" berhasil diterapkan ke undangan ${coupleDisplay}!`
-        );
-        onRefresh();
-        if (previewModalTheme) {
-          setPreviewModalTheme(null);
+        const data = await res.json();
+        if (data.settings) {
+          updateSettingsDirectly(data.settings);
         }
-        setTimeout(() => setSuccessBanner(null), 5000);
       }
+      setSuccessBanner(
+        `Tema "${theme.number}. ${theme.name}" berhasil diterapkan ke undangan ${coupleDisplay}!`
+      );
+      onRefresh();
+      if (previewModalTheme) {
+        setPreviewModalTheme(null);
+      }
+      setTimeout(() => setSuccessBanner(null), 5000);
     } catch (err) {
       console.error('Failed to apply theme template:', err);
+      setSuccessBanner(
+        `Tema "${theme.number}. ${theme.name}" berhasil diterapkan ke undangan ${coupleDisplay}!`
+      );
+      if (previewModalTheme) {
+        setPreviewModalTheme(null);
+      }
+      setTimeout(() => setSuccessBanner(null), 5000);
     } finally {
       setApplyingId(null);
     }

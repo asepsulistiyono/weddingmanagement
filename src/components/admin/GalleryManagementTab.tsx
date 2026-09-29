@@ -21,6 +21,8 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { useRealtime } from '../../context/RealtimeContext.tsx';
+import { useAuth } from '../../context/AuthContext.tsx';
+import { sanitizeSlug } from '../../utils/slugHelper.ts';
 import type { GalleryPhoto } from '../../types.ts';
 import { 
   compressImageFile, 
@@ -30,13 +32,19 @@ import {
 } from '../../utils/imageCompressor.ts';
 
 export const GalleryManagementTab: React.FC = () => {
-  const { settings, refreshAll } = useRealtime();
+  const { settings, refreshAll, updateSettingsDirectly } = useRealtime();
+  const { user } = useAuth();
+  const activeSlug =
+    (!user?.isOwner && user?.weddingSlug ? sanitizeSlug(user.weddingSlug) : null) ||
+    settings?.slug ||
+    'rizky_dan_siti';
   const photos: GalleryPhoto[] = settings?.galleries || [];
 
   const [activeCategoryFilter, setActiveCategoryFilter] = useState<string>('Semua');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [editingPhoto, setEditingPhoto] = useState<GalleryPhoto | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Form states
   const [uploadMode, setUploadMode] = useState<'upload' | 'url'>('upload');
@@ -124,10 +132,6 @@ export const GalleryManagementTab: React.FC = () => {
       return;
     }
 
-    if (!confirm(`Ditemukan ${uncompressedPhotos.length} foto berukuran besar di database. Mulai kompresi agresif sekarang?`)) {
-      return;
-    }
-
     setBatchCompressing(true);
     setBatchResultMsg(null);
     let totalSavedBytes = 0;
@@ -142,7 +146,7 @@ export const GalleryManagementTab: React.FC = () => {
           await fetch(`/api/admin/gallery/${p.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: comp.dataUrl })
+            body: JSON.stringify({ slug: activeSlug, url: comp.dataUrl })
           });
           count++;
         } catch (err) {
@@ -178,6 +182,7 @@ export const GalleryManagementTab: React.FC = () => {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            slug: activeSlug,
             url: photoUrl.trim(),
             caption: photoCaption.trim(),
             category: photoCategory,
@@ -186,6 +191,10 @@ export const GalleryManagementTab: React.FC = () => {
         });
 
         if (res.ok) {
+          const data = await res.json();
+          if (settings && data.galleries) {
+            updateSettingsDirectly({ ...settings, galleries: data.galleries });
+          }
           setFeedbackMsg({ type: 'success', text: 'Foto berhasil diperbarui!' });
           closeModal();
           await refreshAll();
@@ -199,6 +208,7 @@ export const GalleryManagementTab: React.FC = () => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            slug: activeSlug,
             url: photoUrl.trim(),
             caption: photoCaption.trim() || 'Momen Bahagia',
             category: photoCategory,
@@ -207,6 +217,10 @@ export const GalleryManagementTab: React.FC = () => {
         });
 
         if (res.ok) {
+          const data = await res.json();
+          if (settings && data.galleries) {
+            updateSettingsDirectly({ ...settings, galleries: data.galleries });
+          }
           setFeedbackMsg({ type: 'success', text: 'Foto baru berhasil ditambahkan ke galeri!' });
           closeModal();
           await refreshAll();
@@ -223,26 +237,36 @@ export const GalleryManagementTab: React.FC = () => {
   };
 
   const handleDeletePhoto = async (id: string) => {
-    if (!confirm('Apakah Anda yakin ingin menghapus foto ini dari galeri?')) return;
-
+    setConfirmDeleteId(null);
+    if (settings) {
+      const nextGalleries = (settings.galleries || []).filter((p) => p.id !== id);
+      updateSettingsDirectly({ ...settings, galleries: nextGalleries });
+    }
     try {
-      const res = await fetch(`/api/admin/gallery/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/admin/gallery/${id}?slug=${encodeURIComponent(activeSlug)}`, { method: 'DELETE' });
       if (res.ok) {
+        setBatchResultMsg('Foto berhasil dihapus dari galeri.');
+        setTimeout(() => setBatchResultMsg(null), 3500);
         await refreshAll();
-      } else {
-        alert('Gagal menghapus foto.');
       }
     } catch {
-      alert('Terjadi kesalahan jaringan.');
+      // local state already updated
     }
   };
 
   const handleToggleFeatured = async (photo: GalleryPhoto) => {
+    const nextFeatured = !photo.isFeatured;
+    if (settings) {
+      const nextGalleries = (settings.galleries || []).map((p) =>
+        p.id === photo.id ? { ...p, isFeatured: nextFeatured } : p
+      );
+      updateSettingsDirectly({ ...settings, galleries: nextGalleries });
+    }
     try {
       await fetch(`/api/admin/gallery/${photo.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isFeatured: !photo.isFeatured })
+        body: JSON.stringify({ slug: activeSlug, isFeatured: nextFeatured })
       });
       await refreshAll();
     } catch (err) {
@@ -479,20 +503,43 @@ export const GalleryManagementTab: React.FC = () => {
                   </button>
 
                   <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => openEditModal(photo)}
-                      title="Edit Keterangan"
-                      className="p-1.5 rounded-lg text-stone-600 hover:text-amber-800 hover:bg-amber-50 transition-colors cursor-pointer"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDeletePhoto(photo.id)}
-                      title="Hapus Foto"
-                      className="p-1.5 rounded-lg text-stone-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {confirmDeleteId === photo.id ? (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleDeletePhoto(photo.id)}
+                          className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer"
+                        >
+                          Ya, Hapus
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="px-2 py-1 rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-600 text-[10px] font-semibold cursor-pointer"
+                        >
+                          Batal
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(photo)}
+                          title="Edit Keterangan"
+                          className="p-1.5 rounded-lg text-stone-600 hover:text-amber-800 hover:bg-amber-50 transition-colors cursor-pointer"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(photo.id)}
+                          title="Hapus Foto"
+                          className="p-1.5 rounded-lg text-stone-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

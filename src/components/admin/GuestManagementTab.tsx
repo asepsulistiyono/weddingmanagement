@@ -56,6 +56,7 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
   const [editingGuest, setEditingGuest] = useState<Guest | null>(null);
   const [selectedWaGuest, setSelectedWaGuest] = useState<Guest | null>(null);
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
+  const [confirmDeleteGuestId, setConfirmDeleteGuestId] = useState<string | null>(null);
 
   // Form states
   const [formName, setFormName] = useState('');
@@ -167,8 +168,8 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
     }
   };
 
-  const handleDeleteGuest = async (id: string, name: string) => {
-    if (!confirm(`Hapus tamu "${name}" dari daftar undangan?`)) return;
+  const handleDeleteGuest = async (id: string) => {
+    setConfirmDeleteGuestId(null);
     try {
       const res = await fetch(`/api/admin/guests/${id}`, { method: 'DELETE' });
       if (res.ok) {
@@ -177,6 +178,24 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
     } catch (err) {
       console.error('Failed to delete guest:', err);
     }
+  };
+
+  const handleExportGuestsCsv = () => {
+    let csv = 'Nama Tamu,Kategori,Nomor Telepon,Alokasi Pax,Status RSVP,Pax Konfirmasi,Check-in,Waktu Check-in,Catatan\n';
+    guests.forEach((g) => {
+      const cleanName = `"${(g.name || '').replace(/"/g, '""')}"`;
+      const cleanNotes = `"${(g.notes || '').replace(/"/g, '""')}"`;
+      csv += `${cleanName},${g.category},${g.phone || '-'},${g.paxAllocated},${g.rsvpStatus},${g.paxConfirmed},${g.checkedIn ? 'Sudah' : 'Belum'},${g.checkedInAt || '-'},${cleanNotes}\n`;
+    });
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'data-tamu-undangan.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const handleToggleCheckin = async (guest: Guest) => {
@@ -297,14 +316,14 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
 
         {/* Buttons */}
         <div className="flex items-center gap-2 flex-wrap">
-          <a
-            href="/api/admin/export/guests"
-            download
+          <button
+            type="button"
+            onClick={handleExportGuestsCsv}
             className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-white border border-stone-200 hover:bg-stone-50 text-stone-700 text-xs sm:text-sm font-semibold transition-colors cursor-pointer shadow-xs"
           >
             <Download className="w-4 h-4 text-stone-500" />
             <span>Ekspor CSV</span>
-          </a>
+          </button>
 
           <button
             type="button"
@@ -530,20 +549,43 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
 
                     <td className="py-3.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          onClick={() => openEditModal(guest)}
-                          className="p-1.5 text-stone-500 hover:text-stone-900 rounded-lg hover:bg-stone-100 transition-colors cursor-pointer"
-                          title="Edit Tamu"
-                        >
-                          <Edit3 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteGuest(guest.id, guest.name)}
-                          className="p-1.5 text-rose-500 hover:text-rose-700 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
-                          title="Hapus Tamu"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {confirmDeleteGuestId === guest.id ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteGuest(guest.id)}
+                              className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold cursor-pointer"
+                            >
+                              Ya, Hapus
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteGuestId(null)}
+                              className="px-2 py-1 rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-600 text-[11px] font-semibold cursor-pointer"
+                            >
+                              Batal
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(guest)}
+                              className="p-1.5 text-stone-500 hover:text-stone-900 rounded-lg hover:bg-stone-100 transition-colors cursor-pointer"
+                              title="Edit Tamu"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteGuestId(guest.id)}
+                              className="p-1.5 text-rose-500 hover:text-rose-700 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Hapus Tamu"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>

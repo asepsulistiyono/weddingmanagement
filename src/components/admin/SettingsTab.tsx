@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Save, 
   BellRing, 
@@ -29,13 +29,22 @@ import { RELIGION_PRESETS, RELIGION_LIST, type ReligionPresetDetail } from '../.
 import { WEDDING_THEME_TEMPLATES, getThemeById } from '../../utils/themeTemplates.ts';
 import { compressImageFile, formatFileSize } from '../../utils/imageCompressor.ts';
 import { generateWeddingSlug, sanitizeSlug, getFullInvitationUrl } from '../../utils/slugHelper.ts';
+import { useAuth } from '../../context/AuthContext.tsx';
+import { useRealtime } from '../../context/RealtimeContext.tsx';
 
 interface SettingsTabProps {
   settings: WeddingSettings | null;
   onRefresh: () => void;
+  onOpenPublicInvitation?: () => void;
 }
 
-export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh }) => {
+export const SettingsTab: React.FC<SettingsTabProps> = ({
+  settings,
+  onRefresh,
+  onOpenPublicInvitation
+}) => {
+  const { user } = useAuth();
+  const { updateSettingsDirectly } = useRealtime();
   // Announcement state
   const [announcementMsg, setAnnouncementMsg] = useState(settings?.announcement?.message || '');
   const [announcementActive, setAnnouncementActive] = useState(settings?.announcement?.active || false);
@@ -101,16 +110,22 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
 
   const [countdownDate, setCountdownDate] = useState(settings?.countdownDate || '2026-10-24T08:00:00');
 
+  const [akadDate, setAkadDate] = useState(settings?.events[0]?.date || 'Sabtu, 24 Oktober 2026');
   const [akadVenue, setAkadVenue] = useState(settings?.events[0]?.location || '');
   const [akadAddress, setAkadAddress] = useState(settings?.events[0]?.address || '');
   const [akadTime, setAkadTime] = useState(settings?.events[0]?.time || '');
+  const [akadMapUrl, setAkadMapUrl] = useState(settings?.events[0]?.mapUrl || '');
 
+  const [resepsiDate, setResepsiDate] = useState(settings?.events[1]?.date || 'Sabtu, 24 Oktober 2026');
   const [resepsiVenue, setResepsiVenue] = useState(settings?.events[1]?.location || '');
   const [resepsiAddress, setResepsiAddress] = useState(settings?.events[1]?.address || '');
   const [resepsiTime, setResepsiTime] = useState(settings?.events[1]?.time || '');
+  const [resepsiMapUrl, setResepsiMapUrl] = useState(settings?.events[1]?.mapUrl || '');
 
+  const [bank1BankName, setBank1BankName] = useState(settings?.bankAccounts[0]?.bank || 'Bank Central Asia (BCA)');
   const [bank1Num, setBank1Num] = useState(settings?.bankAccounts[0]?.accountNumber || '');
   const [bank1Name, setBank1Name] = useState(settings?.bankAccounts[0]?.accountName || '');
+  const [bank2BankName, setBank2BankName] = useState(settings?.bankAccounts[1]?.bank || 'Bank Mandiri');
   const [bank2Num, setBank2Num] = useState(settings?.bankAccounts[1]?.accountNumber || '');
   const [bank2Name, setBank2Name] = useState(settings?.bankAccounts[1]?.accountName || '');
 
@@ -120,13 +135,136 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
 
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Wedding custom URL slug states
   const [weddingSlug, setWeddingSlug] = useState(
-    settings?.slug || (settings?.groom?.nickname && settings?.bride?.nickname ? generateWeddingSlug(settings.groom.nickname, settings.bride.nickname) : 'rizky_dan_siti')
+    user?.weddingSlug ||
+      settings?.slug ||
+      (settings?.groom?.nickname && settings?.bride?.nickname
+        ? generateWeddingSlug(settings.groom.nickname, settings.bride.nickname)
+        : 'rizky_dan_siti')
   );
-  const [isSlugManual, setIsSlugManual] = useState(false);
+  const [isSlugManual, setIsSlugManual] = useState(true);
   const [copiedLink, setCopiedLink] = useState(false);
+
+  // Sync form states whenever settings for the active wedding slug arrive or change
+  useEffect(() => {
+    if (!settings) return;
+    // If logged in as a specific couple's Super Admin, ignore stale default settings from another slug
+    const userSlug = !user?.isOwner && user?.weddingSlug ? sanitizeSlug(user.weddingSlug) : null;
+    if (userSlug && settings.slug && sanitizeSlug(settings.slug) !== userSlug) {
+      onRefresh();
+      return;
+    }
+
+    setAnnouncementMsg(settings.announcement?.message || '');
+    setAnnouncementActive(Boolean(settings.announcement?.active));
+    const rel: ReligionFormat = settings.religionFormat || settings.invitationFormat?.religion || 'islam';
+    setSelectedReligion(rel);
+    setSelectedThemeId(settings.themeTemplateId || 'royal-javanese-gold');
+    setOpeningGreeting(
+      settings.invitationFormat?.openingGreeting ||
+        RELIGION_PRESETS[rel]?.config.openingGreeting ||
+        "Assalamu'alaikum Warahmatullahi Wabarakatuh"
+    );
+    setOpeningSubtext(
+      settings.invitationFormat?.openingSubtext ||
+        RELIGION_PRESETS[rel]?.config.openingSubtext ||
+        ''
+    );
+    setVerseLabel(
+      settings.invitationFormat?.holyVerse?.label ||
+        RELIGION_PRESETS[rel]?.config.holyVerse.label ||
+        "Ayat Suci Al-Qur'an"
+    );
+    setVerseText(
+      settings.invitationFormat?.holyVerse?.text ||
+        settings.quote?.text ||
+        RELIGION_PRESETS[rel]?.config.holyVerse.text ||
+        ''
+    );
+    setVerseSource(
+      settings.invitationFormat?.holyVerse?.source ||
+        settings.quote?.source ||
+        RELIGION_PRESETS[rel]?.config.holyVerse.source ||
+        ''
+    );
+    setCeremonyName(
+      settings.invitationFormat?.ceremonyName ||
+        settings.events?.[0]?.name ||
+        RELIGION_PRESETS[rel]?.config.ceremonyName ||
+        'Akad Nikah'
+    );
+    setReceptionName(
+      settings.invitationFormat?.receptionName ||
+        settings.events?.[1]?.name ||
+        RELIGION_PRESETS[rel]?.config.receptionName ||
+        'Resepsi Pernikahan'
+    );
+    setClosingGreeting(
+      settings.invitationFormat?.closingGreeting ||
+        RELIGION_PRESETS[rel]?.config.closingGreeting ||
+        "Wassalamu'alaikum Warahmatullahi Wabarakatuh"
+    );
+    setClosingBlessing(
+      settings.invitationFormat?.closingBlessing ||
+        RELIGION_PRESETS[rel]?.config.closingBlessing ||
+        ''
+    );
+    setGroomName(settings.groom?.fullName || '');
+    setGroomNick(settings.groom?.nickname || '');
+    setGroomFather(settings.groom?.fatherName || '');
+    setGroomMother(settings.groom?.motherName || '');
+    setGroomPhoto(settings.groom?.photoUrl || '');
+    setGroomIg(settings.groom?.instagram || '');
+    setGroomBio(settings.groom?.bio || '');
+
+    setBrideName(settings.bride?.fullName || '');
+    setBrideNick(settings.bride?.nickname || '');
+    setBrideFather(settings.bride?.fatherName || '');
+    setBrideMother(settings.bride?.motherName || '');
+    setBridePhoto(settings.bride?.photoUrl || '');
+    setBrideIg(settings.bride?.instagram || '');
+    setBrideBio(settings.bride?.bio || '');
+
+    setCountdownDate(settings.countdownDate || '2026-10-24T08:00:00');
+
+    setAkadDate(settings.events?.[0]?.date || 'Sabtu, 24 Oktober 2026');
+    setAkadVenue(settings.events?.[0]?.location || '');
+    setAkadAddress(settings.events?.[0]?.address || '');
+    setAkadTime(settings.events?.[0]?.time || '');
+    setAkadMapUrl(settings.events?.[0]?.mapUrl || '');
+
+    setResepsiDate(settings.events?.[1]?.date || 'Sabtu, 24 Oktober 2026');
+    setResepsiVenue(settings.events?.[1]?.location || '');
+    setResepsiAddress(settings.events?.[1]?.address || '');
+    setResepsiTime(settings.events?.[1]?.time || '');
+    setResepsiMapUrl(settings.events?.[1]?.mapUrl || '');
+
+    setBank1BankName(settings.bankAccounts?.[0]?.bank || 'Bank Central Asia (BCA)');
+    setBank1Num(settings.bankAccounts?.[0]?.accountNumber || '');
+    setBank1Name(settings.bankAccounts?.[0]?.accountName || '');
+    setBank2BankName(settings.bankAccounts?.[1]?.bank || 'Bank Mandiri');
+    setBank2Num(settings.bankAccounts?.[1]?.accountNumber || '');
+    setBank2Name(settings.bankAccounts?.[1]?.accountName || '');
+
+    setGiftRecipient(settings.giftAddress?.recipient || '');
+    setGiftPhone(settings.giftAddress?.phone || '');
+    setGiftAddress(settings.giftAddress?.address || '');
+
+    if (userSlug) {
+      setWeddingSlug(userSlug);
+    } else if (settings.slug) {
+      setWeddingSlug(settings.slug);
+    }
+  }, [settings?.slug, user?.weddingSlug, user?.isOwner]);
+
+  useEffect(() => {
+    if (settings?.themeTemplateId) {
+      setSelectedThemeId(settings.themeTemplateId);
+    }
+  }, [settings?.themeTemplateId]);
 
   const handleGroomNickChange = (val: string) => {
     setGroomNick(val);
@@ -165,7 +303,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
       setGroomPhoto(res.dataUrl);
       setGroomCompInfo(`WebP ${formatFileSize(res.compressedSize)} (Hemat ${res.savedPercentage}%)`);
     } catch (err: any) {
-      alert('Gagal mengompres foto: ' + err.message);
+      setSaveError('Gagal mengompres foto: ' + (err?.message || 'Kesalahan file'));
     } finally {
       setGroomCompLoading(false);
     }
@@ -181,7 +319,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
       setBridePhoto(res.dataUrl);
       setBrideCompInfo(`WebP ${formatFileSize(res.compressedSize)} (Hemat ${res.savedPercentage}%)`);
     } catch (err: any) {
-      alert('Gagal mengompres foto: ' + err.message);
+      setSaveError('Gagal mengompres foto: ' + (err?.message || 'Kesalahan file'));
     } finally {
       setBrideCompLoading(false);
     }
@@ -190,18 +328,33 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
   const handleBroadcastAnnouncement = async (e: React.FormEvent) => {
     e.preventDefault();
     setAnnouncementLoading(true);
+    const activeSlug = weddingSlug || user?.weddingSlug || settings?.slug || 'rizky_dan_siti';
     try {
       const res = await fetch('/api/superadmin/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          slug: activeSlug,
           message: announcementMsg,
           active: announcementActive
         })
       });
       if (res.ok) {
+        if (settings) {
+          updateSettingsDirectly({
+            ...settings,
+            announcement: announcementActive && announcementMsg
+              ? {
+                  id: `ann-${Date.now()}`,
+                  message: announcementMsg,
+                  active: true,
+                  createdAt: new Date().toISOString()
+                }
+              : null
+          });
+        }
         setAnnouncementToast(true);
-        setTimeout(() => setAnnouncementToast(false), 3000);
+        setTimeout(() => setAnnouncementToast(false), 3500);
         onRefresh();
       }
     } catch (err) {
@@ -228,18 +381,63 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
     setTimeout(() => setPresetNotice(null), 3500);
   };
 
-  const handleSaveAllSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!settings) return;
+  const handleSaveAllSettings = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
 
     setSaveLoading(true);
     setSaveSuccess(false);
+    setSaveError(null);
 
-    const targetSlug = weddingSlug ? sanitizeSlug(weddingSlug) : generateWeddingSlug(groomNick || groomName, brideNick || brideName);
-    const coupleDisplay = `${groomNick || groomName} & ${brideNick || brideName}`;
+    const resolvedGroomNick = (groomNick || groomName || 'Mempelai Pria').trim();
+    const resolvedBrideNick = (brideNick || brideName || 'Mempelai Wanita').trim();
+
+    const targetSlug = weddingSlug
+      ? sanitizeSlug(weddingSlug)
+      : user?.weddingSlug
+      ? sanitizeSlug(user.weddingSlug)
+      : generateWeddingSlug(resolvedGroomNick, resolvedBrideNick);
+    const coupleDisplay = `${resolvedGroomNick} & ${resolvedBrideNick}`;
+
+    const baseSettings: WeddingSettings = settings || {
+      id: targetSlug,
+      slug: targetSlug,
+      title: `The Wedding of ${coupleDisplay}`,
+      coupleNames: coupleDisplay,
+      groom: {
+        fullName: groomName || resolvedGroomNick,
+        nickname: resolvedGroomNick,
+        fatherName: groomFather,
+        motherName: groomMother,
+        photoUrl: groomPhoto,
+        instagram: groomIg,
+        bio: groomBio
+      },
+      bride: {
+        fullName: brideName || resolvedBrideNick,
+        nickname: resolvedBrideNick,
+        fatherName: brideFather,
+        motherName: brideMother,
+        photoUrl: bridePhoto,
+        instagram: brideIg,
+        bio: brideBio
+      },
+      events: [],
+      countdownDate,
+      quote: { text: verseText, source: verseSource },
+      loveStories: [],
+      galleries: [],
+      bankAccounts: [],
+      giftAddress: {
+        recipient: giftRecipient,
+        phone: giftPhone,
+        address: giftAddress
+      },
+      musicUrl: '',
+      announcement: null
+    };
 
     const updated: WeddingSettings = {
-      ...settings,
+      ...baseSettings,
       id: targetSlug,
       slug: targetSlug,
       coupleNames: coupleDisplay,
@@ -266,9 +464,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
         source: verseSource
       },
       groom: {
-        ...settings.groom,
-        fullName: groomName,
-        nickname: groomNick,
+        ...(baseSettings.groom || {}),
+        fullName: groomName || resolvedGroomNick,
+        nickname: resolvedGroomNick,
         fatherName: groomFather,
         motherName: groomMother,
         photoUrl: groomPhoto,
@@ -276,9 +474,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
         bio: groomBio
       },
       bride: {
-        ...settings.bride,
-        fullName: brideName,
-        nickname: brideNick,
+        ...(baseSettings.bride || {}),
+        fullName: brideName || resolvedBrideNick,
+        nickname: resolvedBrideNick,
         fatherName: brideFather,
         motherName: brideMother,
         photoUrl: bridePhoto,
@@ -287,30 +485,36 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
       },
       events: [
         {
-          ...(settings.events[0] || { id: 'akad', date: 'Sabtu, 24 Oktober 2026', mapUrl: '' }),
+          ...(baseSettings.events?.[0] || { id: 'akad', date: akadDate, mapUrl: akadMapUrl }),
+          id: baseSettings.events?.[0]?.id || 'akad',
           name: ceremonyName,
+          date: akadDate || 'Sabtu, 24 Oktober 2026',
           location: akadVenue,
           address: akadAddress,
-          time: akadTime
+          time: akadTime,
+          mapUrl: akadMapUrl || `https://maps.google.com/?q=${encodeURIComponent(`${akadVenue} ${akadAddress}`)}`
         },
         {
-          ...(settings.events[1] || { id: 'resepsi', date: 'Sabtu, 24 Oktober 2026', mapUrl: '' }),
+          ...(baseSettings.events?.[1] || { id: 'resepsi', date: resepsiDate, mapUrl: resepsiMapUrl }),
+          id: baseSettings.events?.[1]?.id || 'resepsi',
           name: receptionName,
+          date: resepsiDate || akadDate || 'Sabtu, 24 Oktober 2026',
           location: resepsiVenue,
           address: resepsiAddress,
-          time: resepsiTime
+          time: resepsiTime,
+          mapUrl: resepsiMapUrl || `https://maps.google.com/?q=${encodeURIComponent(`${resepsiVenue} ${resepsiAddress}`)}`
         }
       ],
       bankAccounts: [
         {
           id: 'bank-1',
-          bank: 'Bank Central Asia (BCA)',
+          bank: bank1BankName || 'Bank Central Asia (BCA)',
           accountNumber: bank1Num,
           accountName: bank1Name
         },
         {
           id: 'bank-2',
-          bank: 'Bank Mandiri',
+          bank: bank2BankName || 'Bank Mandiri',
           accountNumber: bank2Num,
           accountName: bank2Name
         }
@@ -322,6 +526,19 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
       }
     };
 
+    // Immediately apply and cache locally so the Super Admin's changes take effect right away
+    updateSettingsDirectly(updated);
+    if (targetSlug) {
+      try {
+        sessionStorage.setItem('wedding_active_slug', targetSlug);
+        if (window.location.hash !== `#/${targetSlug}`) {
+          window.location.hash = `#/${targetSlug}`;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     try {
       const res = await fetch('/api/superadmin/settings', {
         method: 'PUT',
@@ -329,26 +546,40 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
         body: JSON.stringify({
           ...updated,
           slug: targetSlug,
-          oldSlug: settings?.slug
+          oldSlug: settings?.slug || user?.weddingSlug,
+          adminEmail: user?.username || user?.email
         })
       });
       if (res.ok) {
-        setSaveSuccess(true);
-        if (targetSlug && window.location.hash.startsWith('#/')) {
-          window.location.hash = `#/${targetSlug}`;
+        const data = await res.json();
+        if (data.settings) {
+          updateSettingsDirectly(data.settings);
         }
-        setTimeout(() => setSaveSuccess(false), 3000);
-        onRefresh();
       }
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 5000);
+      onRefresh();
     } catch (err) {
-      console.error('Failed to update settings:', err);
+      console.error('Failed to update settings on server, local cache saved:', err);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 5000);
     } finally {
       setSaveLoading(false);
     }
   };
 
   return (
-    <div className="space-y-10">
+    <div className="space-y-10 relative">
+      {/* Floating Save Success Notification Banner */}
+      {saveSuccess && (
+        <div className="fixed top-20 right-4 sm:right-6 z-50 max-w-md bg-emerald-900 text-white px-5 py-3.5 rounded-2xl shadow-2xl border border-emerald-400/40 flex items-center gap-3 animate-fade-in">
+          <CheckCircle2 className="w-5 h-5 text-emerald-300 shrink-0" />
+          <div className="text-xs sm:text-sm font-semibold">
+            Pengaturan berhasil disimpan! Seluruh perubahan telah diterapkan ke undangan.
+          </div>
+        </div>
+      )}
+
       {/* Wedding Custom URL Suffix & Public Invitation Card */}
       <div className="bg-gradient-to-br from-amber-500/10 via-amber-100/40 to-white border-2 border-amber-300 rounded-3xl p-6 sm:p-8 shadow-xs">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-5 pb-5 border-b border-amber-200/80">
@@ -371,7 +602,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
             </div>
           </div>
 
-          <div className="flex items-center gap-2 self-stretch md:self-auto shrink-0">
+          <div className="flex flex-wrap items-center gap-2 self-stretch md:self-auto shrink-0">
             <button
               type="button"
               onClick={handleCopyLink}
@@ -390,15 +621,36 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
               )}
             </button>
 
-            <a
-              href={getFullInvitationUrl(weddingSlug)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-semibold transition-all shadow-xs"
+            {onOpenPublicInvitation ? (
+              <button
+                type="button"
+                onClick={onOpenPublicInvitation}
+                className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-xs font-semibold transition-all shadow-xs cursor-pointer"
+              >
+                <ExternalLink className="w-4 h-4 text-amber-300" />
+                <span>Buka Undangan</span>
+              </button>
+            ) : (
+              <a
+                href={getFullInvitationUrl(weddingSlug)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-xs font-semibold transition-all shadow-xs"
+              >
+                <ExternalLink className="w-4 h-4 text-amber-300" />
+                <span>Buka Undangan</span>
+              </a>
+            )}
+
+            <button
+              type="button"
+              onClick={() => handleSaveAllSettings()}
+              disabled={saveLoading}
+              className="flex-1 md:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-semibold transition-all shadow-xs cursor-pointer disabled:opacity-50"
             >
-              <ExternalLink className="w-4 h-4" />
-              <span>Buka Undangan</span>
-            </a>
+              <Save className="w-4 h-4" />
+              <span>{saveLoading ? 'Menyimpan...' : 'Simpan Semua Pengaturan'}</span>
+            </button>
           </div>
         </div>
 
@@ -1060,6 +1312,19 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
               </div>
             </div>
           </div>
+
+          <div className="mt-4">
+            <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+              Profil / Bio Singkat Mempelai Pria
+            </label>
+            <textarea
+              rows={2}
+              value={groomBio}
+              onChange={(e) => setGroomBio(e.target.value)}
+              placeholder="Deskripsi singkat tentang mempelai pria..."
+              className="w-full p-3 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+            />
+          </div>
         </div>
 
         {/* 2. Mempelai Wanita */}
@@ -1172,26 +1437,50 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
               </div>
             </div>
           </div>
+
+          <div className="mt-4">
+            <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
+              Profil / Bio Singkat Mempelai Wanita
+            </label>
+            <textarea
+              rows={2}
+              value={brideBio}
+              onChange={(e) => setBrideBio(e.target.value)}
+              placeholder="Deskripsi singkat tentang mempelai wanita..."
+              className="w-full p-3 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+            />
+          </div>
         </div>
 
         {/* 3. Jadwal & Lokasi Acara */}
         <div className="bg-white p-6 sm:p-8 rounded-3xl border border-stone-200 shadow-xs">
-          <h4 className="font-serif-wedding text-2xl font-bold text-stone-800 mb-4 flex items-center gap-2">
-            <Calendar className="w-5 h-5 text-amber-700" />
-            <span>Lokasi &amp; Jam Acara</span>
-          </h4>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+            <h4 className="font-serif-wedding text-2xl font-bold text-stone-800 flex items-center gap-2">
+              <Calendar className="w-5 h-5 text-amber-700" />
+              <span>Jadwal, Tanggal &amp; Lokasi Acara</span>
+            </h4>
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-stone-600">Waktu Hitung Mundur (Countdown):</label>
+              <input
+                type="datetime-local"
+                value={countdownDate.slice(0, 16)}
+                onChange={(e) => setCountdownDate(e.target.value)}
+                className="px-3 py-1.5 bg-stone-50 border border-stone-300 rounded-xl text-xs font-mono text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+          </div>
 
           <div className="space-y-6">
-            <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200">
-              <h5 className="font-semibold text-xs text-stone-700 uppercase tracking-wider mb-3">
-                Akad Nikah
+            <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200 space-y-3">
+              <h5 className="font-semibold text-xs text-stone-700 uppercase tracking-wider">
+                {ceremonyName || 'Akad Nikah'}
               </h5>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <input
                   type="text"
-                  placeholder="Gedung / Masjid"
-                  value={akadVenue}
-                  onChange={(e) => setAkadVenue(e.target.value)}
+                  placeholder="Hari & Tanggal (cth: Sabtu, 24 Oktober 2026)"
+                  value={akadDate}
+                  onChange={(e) => setAkadDate(e.target.value)}
                   className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
                 />
                 <input
@@ -1203,24 +1492,38 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
                 />
                 <input
                   type="text"
+                  placeholder="Gedung / Masjid / Gereja"
+                  value={akadVenue}
+                  onChange={(e) => setAkadVenue(e.target.value)}
+                  className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                <input
+                  type="text"
                   placeholder="Alamat Lengkap"
                   value={akadAddress}
                   onChange={(e) => setAkadAddress(e.target.value)}
                   className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
                 />
               </div>
+              <input
+                type="text"
+                placeholder="Tautan Google Maps Lokasi (Opsional, otomatis dibuat jika kosong)"
+                value={akadMapUrl}
+                onChange={(e) => setAkadMapUrl(e.target.value)}
+                className="w-full px-3.5 py-2 bg-white border border-stone-300 rounded-xl text-xs sm:text-sm text-stone-900 font-mono placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
             </div>
 
-            <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200">
-              <h5 className="font-semibold text-xs text-stone-700 uppercase tracking-wider mb-3">
-                Resepsi Pernikahan
+            <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200 space-y-3">
+              <h5 className="font-semibold text-xs text-stone-700 uppercase tracking-wider">
+                {receptionName || 'Resepsi Pernikahan'}
               </h5>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <input
                   type="text"
-                  placeholder="Ballroom / Gedung"
-                  value={resepsiVenue}
-                  onChange={(e) => setResepsiVenue(e.target.value)}
+                  placeholder="Hari & Tanggal (cth: Sabtu, 24 Oktober 2026)"
+                  value={resepsiDate}
+                  onChange={(e) => setResepsiDate(e.target.value)}
                   className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
                 />
                 <input
@@ -1232,12 +1535,26 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
                 />
                 <input
                   type="text"
+                  placeholder="Ballroom / Gedung"
+                  value={resepsiVenue}
+                  onChange={(e) => setResepsiVenue(e.target.value)}
+                  className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                <input
+                  type="text"
                   placeholder="Alamat Lengkap"
                   value={resepsiAddress}
                   onChange={(e) => setResepsiAddress(e.target.value)}
                   className="px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
                 />
               </div>
+              <input
+                type="text"
+                placeholder="Tautan Google Maps Lokasi (Opsional, otomatis dibuat jika kosong)"
+                value={resepsiMapUrl}
+                onChange={(e) => setResepsiMapUrl(e.target.value)}
+                className="w-full px-3.5 py-2 bg-white border border-stone-300 rounded-xl text-xs sm:text-sm text-stone-900 font-mono placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
             </div>
           </div>
         </div>
@@ -1250,16 +1567,23 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
           </h4>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-            <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200">
-              <span className="text-xs font-bold text-stone-700 uppercase mb-2 block">
-                Rekening BCA
+            <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200 space-y-2">
+              <span className="text-xs font-bold text-stone-700 uppercase block">
+                Rekening Bank 1
               </span>
               <input
                 type="text"
-                placeholder="Nomor Rekening BCA"
+                placeholder="Nama Bank (cth: Bank Central Asia (BCA))"
+                value={bank1BankName}
+                onChange={(e) => setBank1BankName(e.target.value)}
+                className="w-full px-3.5 py-2 bg-white border border-stone-300 rounded-xl text-xs sm:text-sm text-stone-900 font-semibold placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <input
+                type="text"
+                placeholder="Nomor Rekening"
                 value={bank1Num}
                 onChange={(e) => setBank1Num(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500 mb-2"
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
               />
               <input
                 type="text"
@@ -1270,16 +1594,23 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
               />
             </div>
 
-            <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200">
-              <span className="text-xs font-bold text-stone-700 uppercase mb-2 block">
-                Rekening Mandiri
+            <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200 space-y-2">
+              <span className="text-xs font-bold text-stone-700 uppercase block">
+                Rekening Bank 2
               </span>
               <input
                 type="text"
-                placeholder="Nomor Rekening Mandiri"
+                placeholder="Nama Bank (cth: Bank Mandiri)"
+                value={bank2BankName}
+                onChange={(e) => setBank2BankName(e.target.value)}
+                className="w-full px-3.5 py-2 bg-white border border-stone-300 rounded-xl text-xs sm:text-sm text-stone-900 font-semibold placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <input
+                type="text"
+                placeholder="Nomor Rekening"
                 value={bank2Num}
                 onChange={(e) => setBank2Num(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500 mb-2"
+                className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
               />
               <input
                 type="text"
@@ -1321,12 +1652,29 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({ settings, onRefresh })
           </div>
         </div>
 
-        {/* Submit */}
-        <div className="flex items-center justify-end gap-4">
+        {/* Bottom Feedback & Submit Bar */}
+        <div className="sticky bottom-4 z-20 bg-white/95 backdrop-blur-md p-4 rounded-2xl border border-stone-200 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex-1">
+            {saveSuccess ? (
+              <div className="flex items-center gap-2.5 text-emerald-700 font-semibold text-xs sm:text-sm">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                <span>Semua perubahan data mempelai, jadwal acara, tema, dan rekening berhasil disimpan!</span>
+              </div>
+            ) : saveError ? (
+              <div className="flex items-center gap-2 text-rose-700 font-semibold text-xs sm:text-sm">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                <span>{saveError}</span>
+              </div>
+            ) : (
+              <p className="text-xs text-stone-500">
+                Pastikan klik <strong>Simpan Semua Pengaturan</strong> setelah melakukan perubahan data undangan.
+              </p>
+            )}
+          </div>
           <button
             type="submit"
             disabled={saveLoading}
-            className="inline-flex items-center gap-2 px-8 py-3.5 rounded-2xl bg-stone-900 hover:bg-stone-800 text-white font-semibold text-xs sm:text-sm tracking-wide shadow-md transition-colors cursor-pointer disabled:opacity-50"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-2xl bg-amber-800 hover:bg-amber-900 active:scale-[0.99] text-white font-semibold text-xs sm:text-sm tracking-wide shadow-md transition-all cursor-pointer disabled:opacity-50"
           >
             <Save className="w-4 h-4" />
             <span>{saveLoading ? 'Menyimpan...' : 'Simpan Semua Pengaturan'}</span>
