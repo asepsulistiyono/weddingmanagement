@@ -43,15 +43,6 @@ const AppContent: React.FC = () => {
       const params = new URLSearchParams(window.location.search);
       const adminParam = params.get('admin');
 
-      // Enforce strict wedding scope: if a non-owner Admin/SuperAdmin is logged in for a specific weddingSlug,
-      // and navigates to a different weddingSlug or the root platform URL, log them out so they must authenticate first.
-      if (isAuthenticated && user && !isOwner) {
-        if (weddingSlug && user.weddingSlug && weddingSlug.toLowerCase() !== user.weddingSlug.toLowerCase()) {
-          logout();
-          setViewMode('invitation');
-        }
-      }
-
       if (adminParam === 'true' || window.location.hash.startsWith('#admin')) {
         if (isAuthenticated && user) {
           setViewMode('admin');

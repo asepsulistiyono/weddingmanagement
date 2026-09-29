@@ -115,8 +115,9 @@ export const AdminUsersTab: React.FC = () => {
           loadedUsers = data.admins;
         }
         if (loadedUsers.length > 0) {
-          setUsers(loadedUsers);
           loadedUsers.forEach((u) => saveCachedAdminUser(u));
+          const mergedList = getCachedAdminsList();
+          setUsers(mergedList);
           return;
         }
       }

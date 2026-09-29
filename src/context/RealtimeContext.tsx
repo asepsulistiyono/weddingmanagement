@@ -33,6 +33,10 @@ function resolveActiveWeddingSlug(): { weddingSlug: string | null; guestSlug: st
     return fromUrl;
   }
   try {
+    const activeSlug = sessionStorage.getItem('wedding_active_slug');
+    if (activeSlug) {
+      return { weddingSlug: activeSlug, guestSlug: fromUrl.guestSlug };
+    }
     const savedUser = localStorage.getItem('wedding_auth_user');
     if (savedUser) {
       const parsed = JSON.parse(savedUser);
