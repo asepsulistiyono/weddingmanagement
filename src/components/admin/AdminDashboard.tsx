@@ -40,7 +40,7 @@ interface AdminDashboardProps {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToInvitation }) => {
-  const { user, isSuperAdmin, isOwner, quickDemoLogin, logout } = useAuth();
+  const { user, isAuthenticated, isSuperAdmin, isOwner, logout } = useAuth();
   const { 
     guests, 
     wishes, 
@@ -63,7 +63,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToInvitati
     if (activeTab === 'database' && !isOwner) {
       setActiveTab('overview');
     }
-  }, [activeTab, isOwner]);
+    if ((activeTab === 'themes' || activeTab === 'settings' || activeTab === 'users') && !isSuperAdmin && !isOwner) {
+      setActiveTab('overview');
+    }
+  }, [activeTab, isOwner, isSuperAdmin]);
+
+  if (!isAuthenticated || !user) {
+    return null;
+  }
 
   // Computed summary metrics
   const coupleTitle = settings ? (settings.coupleNames || `${settings.groom.nickname} & ${settings.bride.nickname}`) : 'Rizky & Siti';
@@ -130,21 +137,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToInvitati
 
           {/* Right Live Info & User info */}
           <div className="flex items-center gap-3">
-            {!isOwner && (
-              <button
-                type="button"
-                onClick={async () => {
-                  await quickDemoLogin('owner');
-                  setActiveTab('users');
-                }}
-                className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-400/40 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
-                title="Beralih ke Mode Pemilik Website (Owner) untuk menambahkan Super Admin baru"
-              >
-                <Crown className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span className="hidden sm:inline">Mode Owner</span>
-              </button>
-            )}
-
             {/* Live Indicator */}
             <div className="hidden md:flex items-center gap-1.5 px-3 py-1 bg-stone-800 rounded-full text-xs border border-stone-700">
               <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />

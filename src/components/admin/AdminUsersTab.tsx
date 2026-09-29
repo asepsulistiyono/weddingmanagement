@@ -39,7 +39,7 @@ import {
 import { generateWeddingSlug, sanitizeSlug, getFullInvitationUrl } from '../../utils/slugHelper.ts';
 
 export const AdminUsersTab: React.FC = () => {
-  const { user: currentUser, isOwner, quickDemoLogin } = useAuth();
+  const { user: currentUser, isOwner } = useAuth();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -817,8 +817,8 @@ export const AdminUsersTab: React.FC = () => {
         </div>
       )}
 
-      {/* Owner Multi-Tenant Guide Banner OR Switch to Owner Banner */}
-      {isOwner ? (
+      {/* Owner Multi-Tenant Guide Banner (Exclusive for Owner) */}
+      {isOwner && (
         <div className="bg-gradient-to-r from-amber-900 via-stone-900 to-stone-900 text-white rounded-2xl sm:rounded-3xl p-5 sm:p-6 border border-amber-600/30 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div className="space-y-1.5">
             <div className="flex flex-wrap items-center gap-2">
@@ -853,26 +853,6 @@ export const AdminUsersTab: React.FC = () => {
               <span>Unduh CSV</span>
             </a>
           </div>
-        </div>
-      ) : (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-950">
-              <Crown className="w-4 h-4 text-amber-700" />
-              <span>Sedang Masuk Sebagai Klien Super Admin ({currentUser?.name})</span>
-            </div>
-            <p className="text-xs text-stone-600">
-              Pada mode Klien Super Admin, Anda hanya dapat mengelola Staf Admin WO untuk pernikahan Anda. Jika Anda adalah <strong>Pemilik Website (Owner)</strong> dan ingin menambahkan akun <strong>Super Admin</strong> baru, silakan beralih ke akun Owner.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => quickDemoLogin('owner')}
-            className="px-3.5 py-2 rounded-xl bg-amber-800 hover:bg-amber-900 text-white text-xs font-bold whitespace-nowrap cursor-pointer flex items-center gap-1.5 shadow-xs shrink-0"
-          >
-            <Crown className="w-3.5 h-3.5 text-amber-200" />
-            <span>Beralih ke Akun Owner</span>
-          </button>
         </div>
       )}
 

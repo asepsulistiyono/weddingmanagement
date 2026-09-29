@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
+import { signInWithPopup, signOut } from 'firebase/auth';
 import type { Session } from '@supabase/supabase-js';
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
 import { supabase, isSupabaseConfigured } from '../lib/supabase.ts';
@@ -28,15 +28,14 @@ export function isOwnerAccountCheck(u?: Partial<AdminUser> | null): boolean {
   const uname = (u.username || '').trim().toLowerCase();
   const email = (u.email || '').trim().toLowerCase();
   return Boolean(
-    u.isOwner ||
-      u.id === 'user-owner-1' ||
-      uname === 'asepsulistiyono1' ||
-      uname === 'owner' ||
-      uname === 'pemilik' ||
-      email === 'asepsulistiyono1@gmail.com' ||
-      email === 'owner@wedding.com' ||
-      email === 'owner@wedding.local'
-  );
+    u.isOwner === true &&
+      (u.id === 'user-owner-1' ||
+        uname === 'asepsulistiyono1' ||
+        uname === 'owner' ||
+        email === 'asepsulistiyono1@gmail.com')
+  ) ||
+    uname === 'asepsulistiyono1' ||
+    email === 'asepsulistiyono1@gmail.com';
 }
 
 export const DEFAULT_FALLBACK_ADMINS: Array<AdminUser & { password?: string }> = [
@@ -178,7 +177,6 @@ function authenticateWithLocalCache(
   const cleanId = identifier.trim().toLowerCase();
   const admins = getCachedAdminsList();
 
-  // Support 'owner' or 'pemilik' as alias for the Owner account
   const isOwnerAlias =
     cleanId === 'owner' ||
     cleanId === 'pemilik' ||
@@ -205,9 +203,9 @@ function authenticateWithLocalCache(
 
     const valid = customPass
       ? password === customPass ||
-        (isOwnerFlag && (password === 'owner123' || password === 'super123' || password === 'admin123'))
+        (isOwnerFlag && (password === 'owner123' || password === 'super123'))
       : password === defaultPass ||
-        (isOwnerFlag && (password === 'owner123' || password === 'super123' || password === 'admin123'));
+        (isOwnerFlag && (password === 'owner123' || password === 'super123'));
 
     if (valid) {
       const userObj: AdminUser = {
@@ -229,46 +227,27 @@ function authenticateWithLocalCache(
 }
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<AdminUser | null>(() => {
-    try {
-      const saved = localStorage.getItem('wedding_auth_user');
-      if (!saved) return null;
-      const parsed = JSON.parse(saved);
-      return {
-        ...parsed,
-        isOwner: isOwnerAccountCheck(parsed),
-      };
-    } catch {
-      return null;
-    }
-  });
-  // Store token in memory (never in localStorage)
+  // Strictly in-memory session: users MUST explicitly log in first before accessing any dashboard
+  const [user, setUser] = useState<AdminUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [supabaseSession, setSupabaseSession] = useState<Session | null>(null);
 
   useEffect(() => {
-    if (user) {
-      localStorage.setItem(
-        'wedding_auth_user',
-        JSON.stringify({
-          ...user,
-          isOwner: isOwnerAccountCheck(user),
-        })
-      );
-    } else {
+    // Clear any legacy auto-login cache so nobody can bypass the login screen
+    try {
       localStorage.removeItem('wedding_auth_user');
+    } catch {
+      // ignore
     }
-  }, [user]);
+  }, []);
 
-  // Helper to sync a Supabase Auth session with backend AdminUser profile
+  // Helper to sync a Supabase Auth session with backend AdminUser profile upon explicit login
   const syncSupabaseUserWithBackend = async (session: Session) => {
     setSupabaseSession(session);
     setToken(session.access_token);
     const email = (session.user.email || '').toLowerCase();
-    const uname = email ? email.split('@')[0] : 'owner';
-    const isSupaOwner =
-      isOwnerAccountCheck({ email, username: uname, isOwner: session.user.user_metadata?.isOwner }) ||
-      Boolean(user && isOwnerAccountCheck(user));
+    const uname = email ? email.split('@')[0] : 'admin';
+    const isSupaOwner = isOwnerAccountCheck({ email, username: uname });
 
     try {
       const res = await fetch('/api/auth/supabase-session', {
@@ -293,7 +272,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (data.user) {
           const syncedUser: AdminUser = {
             ...data.user,
-            isOwner: Boolean(data.user.isOwner || isSupaOwner),
+            isOwner: isOwnerAccountCheck(data.user) || isSupaOwner,
           };
           setUser(syncedUser);
           saveCachedAdminUser(syncedUser);
@@ -304,7 +283,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Failed to sync Supabase session with backend:', err);
     }
 
-    // Fallback if backend endpoint is unreachable
     const fallbackSupaUser: AdminUser = {
       id: isSupaOwner ? 'user-owner-1' : session.user.id,
       username: isSupaOwner ? 'asepsulistiyono1' : uname,
@@ -312,7 +290,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         session.user.user_metadata?.full_name ||
         session.user.user_metadata?.name ||
         (isSupaOwner ? 'Asep Sulistiyono (Owner / Pemilik Website)' : uname),
-      email: email || 'asepsulistiyono1@gmail.com',
+      email: email || `${uname}@wedding.local`,
       role: 'super_admin',
       isOwner: isSupaOwner,
       active: true,
@@ -322,53 +300,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     saveCachedAdminUser(fallbackSupaUser);
   };
 
-  // 1. Listen to Supabase Auth session & state changes
-  useEffect(() => {
-    if (!isSupabaseConfigured) return;
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      // Do not overwrite an active manual Owner/Admin login unless no user is logged in
-      if (session && !localStorage.getItem('wedding_auth_user')) {
-        syncSupabaseUserWithBackend(session);
-      }
-    }).catch(() => {});
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      setSupabaseSession(session);
-      if (event === 'SIGNED_IN' && session) {
-        syncSupabaseUserWithBackend(session);
-      } else if (event === 'SIGNED_OUT') {
-        setToken(null);
-      }
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  // 2. Listen to Firebase Auth state changes
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        try {
-          const idToken = await firebaseUser.getIdToken();
-          setToken(idToken);
-        } catch (err) {
-          console.error('Failed to get Firebase ID token:', err);
-        }
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
   const login = async (usernameOrEmail: string, password: string) => {
     const cleanInput = usernameOrEmail.trim();
     const lowerInput = cleanInput.toLowerCase();
 
-    // Map 'owner' or 'pemilik' alias to 'asepsulistiyono1'
     const normalizedIdentifier =
       lowerInput === 'owner' || lowerInput === 'pemilik'
         ? 'asepsulistiyono1'
@@ -420,14 +355,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             };
             saveCachedAdminUser({ ...loggedInUser, password });
             setUser(loggedInUser);
-            setToken(data.token);
+            setToken(data.token || `token_${loggedInUser.role}_${loggedInUser.id}_${Date.now()}`);
             return { success: true };
           }
           // If server returned 401/400, check local cache in case user was created/reset on client
           const localCheck = authenticateWithLocalCache(normalizedIdentifier, password);
           if (localCheck.success && localCheck.user) {
             setUser(localCheck.user);
-            setToken(localCheck.token || null);
+            setToken(localCheck.token || `token_${localCheck.user.role}_${localCheck.user.id}_${Date.now()}`);
             return { success: true };
           }
           return { success: false, error: data.error || 'Login gagal.' };
@@ -443,7 +378,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const fallbackResult = authenticateWithLocalCache(normalizedIdentifier, password);
     if (fallbackResult.success && fallbackResult.user) {
       setUser(fallbackResult.user);
-      setToken(fallbackResult.token || null);
+      setToken(fallbackResult.token || `token_${fallbackResult.user.role}_${fallbackResult.user.id}_${Date.now()}`);
       return { success: true };
     }
 
@@ -509,19 +444,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const quickDemoLogin = async (role: 'owner' | 'super_admin' | 'admin') => {
-    if (role === 'owner') {
-      const res = await login('asepsulistiyono1', 'owner123');
-      if (!res.success) {
-        const ownerFallback = DEFAULT_FALLBACK_ADMINS[0];
-        setUser({ ...ownerFallback, isOwner: true });
-        setToken(`token_owner_user-owner-1_${Date.now()}`);
-      }
-    } else if (role === 'super_admin') {
-      await login('superadmin', 'super123');
-    } else {
-      await login('adminwo', 'admin123');
-    }
+  const quickDemoLogin = async (_role: 'owner' | 'super_admin' | 'admin') => {
+    // Quick demo login without password is disabled for security: all roles must authenticate explicitly
   };
 
   const logout = () => {
@@ -532,6 +456,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSupabaseSession(null);
     setUser(null);
     setToken(null);
+    try {
+      localStorage.removeItem('wedding_auth_user');
+    } catch {
+      // ignore
+    }
   };
 
   const isOwner = isOwnerAccountCheck(user);
@@ -542,10 +471,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         token,
         supabaseSession,
-        isAuthenticated: !!user,
-        isSuperAdmin: user?.role === 'super_admin' || isOwner,
-        isAdmin: user?.role === 'admin' || user?.role === 'super_admin' || isOwner,
-        isOwner,
+        isAuthenticated: Boolean(user && token),
+        isSuperAdmin: Boolean(user && token && (user.role === 'super_admin' || isOwner)),
+        isAdmin: Boolean(user && token && (user.role === 'admin' || user.role === 'super_admin' || isOwner)),
+        isOwner: Boolean(user && token && isOwner),
         login,
         loginWithGoogle,
         quickDemoLogin,

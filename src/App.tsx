@@ -24,7 +24,7 @@ import { parseWeddingAndGuestFromUrl } from './utils/slugHelper.ts';
 import { getThemeById } from './utils/themeTemplates.ts';
 
 const AppContent: React.FC = () => {
-  const { isAuthenticated, isSuperAdmin } = useAuth();
+  const { isAuthenticated, user, isOwner, logout } = useAuth();
   const { guests, settings, startMusic } = useRealtime();
   const activeTheme = getThemeById(settings?.themeTemplateId);
 
@@ -39,12 +39,25 @@ const AppContent: React.FC = () => {
   // Check URL params for ?to=slug, #/slug?to=slug or #admin
   useEffect(() => {
     const handleCheckUrl = () => {
-      const { guestSlug } = parseWeddingAndGuestFromUrl();
+      const { weddingSlug, guestSlug } = parseWeddingAndGuestFromUrl();
       const params = new URLSearchParams(window.location.search);
       const adminParam = params.get('admin');
 
+      // Enforce strict wedding scope: if a non-owner Admin/SuperAdmin is logged in for a specific weddingSlug,
+      // and navigates to a different weddingSlug or the root platform URL, log them out so they must authenticate first.
+      if (isAuthenticated && user && !isOwner) {
+        if (weddingSlug && user.weddingSlug && weddingSlug.toLowerCase() !== user.weddingSlug.toLowerCase()) {
+          logout();
+          setViewMode('invitation');
+        }
+      }
+
       if (adminParam === 'true' || window.location.hash.startsWith('#admin')) {
-        setViewMode('admin');
+        if (isAuthenticated && user) {
+          setViewMode('admin');
+        } else {
+          setIsLoginModalOpen(true);
+        }
       }
 
       if (guestSlug) {
@@ -76,15 +89,21 @@ const AppContent: React.FC = () => {
     handleCheckUrl();
     window.addEventListener('hashchange', handleCheckUrl);
     return () => window.removeEventListener('hashchange', handleCheckUrl);
-  }, [guests]);
+  }, [guests, isAuthenticated, user, isOwner]);
 
   const handleOpenInvitation = () => {
     setIsCoverOpen(false);
     startMusic();
   };
 
+  // Require explicit login every time before entering the dashboard from the invitation page
+  const handleRequestAdminAccess = () => {
+    logout();
+    setIsLoginModalOpen(true);
+  };
+
   if (viewMode === 'admin') {
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !user) {
       return (
         <div className="min-h-screen bg-[#F8F6F0] flex items-center justify-center p-4">
           <LoginModal
@@ -95,7 +114,13 @@ const AppContent: React.FC = () => {
         </div>
       );
     }
-    return <AdminDashboard onBackToInvitation={() => setViewMode('invitation')} />;
+    return (
+      <AdminDashboard
+        onBackToInvitation={() => {
+          setViewMode('invitation');
+        }}
+      />
+    );
   }
 
   return (
@@ -153,9 +178,9 @@ const AppContent: React.FC = () => {
       {/* Footer */}
       <FooterSection
         settings={settings}
-        onOpenLogin={() => setIsLoginModalOpen(true)}
-        onOpenAdmin={() => setViewMode('admin')}
-        isAuthenticated={isAuthenticated}
+        onOpenLogin={handleRequestAdminAccess}
+        onOpenAdmin={handleRequestAdminAccess}
+        isAuthenticated={false}
       />
 
       {/* Persistent Floating Controls (tampil setelah sampul undangan dibuka) */}
@@ -163,8 +188,8 @@ const AppContent: React.FC = () => {
         <>
           <Navbar
             onOpenQr={() => setIsQrModalOpen(true)}
-            onOpenLogin={() => setIsLoginModalOpen(true)}
-            onOpenAdmin={() => setViewMode('admin')}
+            onOpenLogin={handleRequestAdminAccess}
+            onOpenAdmin={handleRequestAdminAccess}
             onOpenGallery={() => setIsGalleryPageOpen(true)}
           />
 

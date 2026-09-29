@@ -125,24 +125,14 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenQr, onOpenLogin, onOpenAdm
         <QrCode className="w-4 h-4" />
       </button>
 
-      {/* Admin Panel Button */}
-      {isLoggedIntoCurrentWedding ? (
-        <button
-          onClick={onOpenAdmin}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs tracking-wide transition-colors cursor-pointer shadow-xs"
-        >
-          <ShieldCheck className="w-3.5 h-3.5 text-white" />
-          <span className="text-white">{isOwner ? 'Panel Owner' : isSuperAdmin ? 'Super Admin' : t.nav.admin}</span>
-        </button>
-      ) : (
-        <button
-          onClick={onOpenLogin}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-medium tracking-wide transition-colors cursor-pointer border border-stone-700"
-        >
-          <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-          <span className="hidden sm:inline">{t.nav.adminLogin}</span>
-        </button>
-      )}
+      {/* Admin Panel Button - Always requires login authentication first */}
+      <button
+        onClick={onOpenLogin}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-stone-800 hover:bg-stone-700 text-stone-200 text-xs font-medium tracking-wide transition-colors cursor-pointer border border-stone-700"
+      >
+        <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+        <span className="hidden sm:inline">{t.nav.adminLogin}</span>
+      </button>
     </nav>
   );
 };
