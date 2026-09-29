@@ -11,6 +11,7 @@ import {
   CalendarCheck
 } from 'lucide-react';
 import type { Guest } from '../../types.ts';
+import { useRealtime } from '../../context/RealtimeContext.tsx';
 
 interface ReceptionCheckinTabProps {
   guests: Guest[];
@@ -21,6 +22,7 @@ export const ReceptionCheckinTab: React.FC<ReceptionCheckinTabProps> = ({
   guests,
   onRefresh
 }) => {
+  const { upsertGuestDirectly } = useRealtime();
   const [query, setQuery] = useState('');
   const [successGuest, setSuccessGuest] = useState<Guest | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -46,27 +48,40 @@ export const ReceptionCheckinTab: React.FC<ReceptionCheckinTabProps> = ({
     setLoading(true);
     setErrorMsg(null);
 
+    const updatedGuest: Guest = {
+      ...guest,
+      checkedIn: !undo,
+      checkedInAt: undo ? null : new Date().toISOString()
+    };
+
+    upsertGuestDirectly(updatedGuest);
+    if (!undo) {
+      setSuccessGuest(updatedGuest);
+    } else {
+      setSuccessGuest(null);
+    }
+    setQuery('');
+
     try {
       const res = await fetch(`/api/admin/guests/${guest.id}/checkin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ undo })
+        body: JSON.stringify({ undo, guest: updatedGuest })
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        setErrorMsg(data.error || 'Gagal check-in tamu.');
-      } else {
-        if (!undo) {
-          setSuccessGuest(data.guest);
-        } else {
-          setSuccessGuest(null);
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data.guest) {
+          upsertGuestDirectly(data.guest);
+          if (!undo) {
+            setSuccessGuest(data.guest);
+          }
         }
-        setQuery('');
-        onRefresh();
       }
+      onRefresh();
     } catch {
-      setErrorMsg('Kesalahan jaringan saat melakukan check-in.');
+      // Already updated in local cache
     } finally {
       setLoading(false);
     }

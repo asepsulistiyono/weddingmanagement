@@ -42,7 +42,7 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
   onRefresh,
   onOpenQr
 }) => {
-  const { settings } = useRealtime();
+  const { settings, upsertGuestDirectly, removeGuestDirectly } = useRealtime();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -57,15 +57,18 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
   const [selectedWaGuest, setSelectedWaGuest] = useState<Guest | null>(null);
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
   const [confirmDeleteGuestId, setConfirmDeleteGuestId] = useState<string | null>(null);
+  const [saveToast, setSaveToast] = useState<string | null>(null);
 
   // Form states
   const [formName, setFormName] = useState('');
   const [formPhone, setFormPhone] = useState('');
   const [formCategory, setFormCategory] = useState<GuestCategory>('Sahabat');
   const [formPax, setFormPax] = useState<number>(2);
+  const [formPaxInput, setFormPaxInput] = useState<string>('2');
   const [formNotes, setFormNotes] = useState('');
   const [formCustomGreeting, setFormCustomGreeting] = useState('');
   const [formLoading, setFormLoading] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const categories: GuestCategory[] = [
     'VIP',
@@ -107,69 +110,170 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
     return matchesSearch && matchesCat && matchesRsvp && matchesCheckin && matchesSent;
   });
 
-  const handleCreateGuest = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formName.trim()) return;
+  const showToast = (msg: string) => {
+    setSaveToast(msg);
+    setTimeout(() => {
+      setSaveToast((prev) => (prev === msg ? null : prev));
+    }, 4500);
+  };
+
+  const handleCreateGuest = async (e?: React.FormEvent | React.MouseEvent) => {
+    if (e) e.preventDefault();
+    if (formLoading) return;
+
+    const cleanName = formName.trim();
+    if (!cleanName) {
+      setFormError('Mohon isi Nama Tamu Undangan terlebih dahulu.');
+      return;
+    }
 
     setFormLoading(true);
+    setFormError(null);
+
+    const parsedPax = parseInt(formPaxInput, 10);
+    const validPax = !isNaN(parsedPax) && parsedPax >= 1 ? Math.min(100, parsedPax) : Math.max(1, formPax || 2);
+
+    const baseSlug =
+      cleanName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || `tamu-${Date.now()}`;
+    let slug = baseSlug;
+    let counter = 1;
+    while (guests.some((g) => g.slug === slug)) {
+      slug = `${baseSlug}-${counter++}`;
+    }
+
+    const newGuestId = `g-${Date.now()}`;
+    const optimisticGuest: Guest = {
+      id: newGuestId,
+      name: cleanName,
+      slug,
+      phone: formPhone.trim(),
+      category: formCategory,
+      paxAllocated: validPax,
+      rsvpStatus: 'unconfirmed',
+      paxConfirmed: 0,
+      checkedIn: false,
+      checkedInAt: null,
+      notes: formNotes.trim(),
+      invitationSent: false,
+      customGreeting: formCustomGreeting.trim(),
+      createdAt: new Date().toISOString()
+    };
+
+    // Immediately add to state & localStorage cache so the new guest appears right away at the top of the table
+    upsertGuestDirectly(optimisticGuest);
+    setSearchTerm('');
+    setSelectedCategory('all');
+    setSelectedRsvp('all');
+    setSelectedCheckin('all');
+    setSelectedSentStatus('all');
+    setIsAddModalOpen(false);
+    resetForm();
+    showToast(`Tamu "${cleanName}" berhasil disimpan ke daftar undangan!`);
+
     try {
       const res = await fetch('/api/admin/guests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: formName.trim(),
-          phone: formPhone.trim(),
-          category: formCategory,
-          paxAllocated: formPax,
-          notes: formNotes.trim(),
-          customGreeting: formCustomGreeting.trim()
+          id: newGuestId,
+          slug,
+          name: cleanName,
+          phone: optimisticGuest.phone,
+          category: optimisticGuest.category,
+          paxAllocated: optimisticGuest.paxAllocated,
+          notes: optimisticGuest.notes,
+          customGreeting: optimisticGuest.customGreeting
         })
       });
-      if (res.ok) {
-        setIsAddModalOpen(false);
-        resetForm();
-        onRefresh();
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data.guest) {
+          upsertGuestDirectly(data.guest);
+        }
       }
+      onRefresh();
     } catch (err) {
-      console.error('Failed to create guest:', err);
+      console.error('Failed to sync guest to server, saved in local cache:', err);
     } finally {
       setFormLoading(false);
     }
   };
 
-  const handleUpdateGuest = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingGuest || !formName.trim()) return;
+  const handleUpdateGuest = async (e?: React.FormEvent | React.MouseEvent) => {
+    if (e) e.preventDefault();
+    if (formLoading || !editingGuest) return;
+
+    const cleanName = formName.trim();
+    if (!cleanName) {
+      setFormError('Mohon isi Nama Tamu Undangan terlebih dahulu.');
+      return;
+    }
 
     setFormLoading(true);
+    setFormError(null);
+
+    const parsedPax = parseInt(formPaxInput, 10);
+    const validPax = !isNaN(parsedPax) && parsedPax >= 1 ? Math.min(100, parsedPax) : Math.max(1, formPax || editingGuest.paxAllocated || 2);
+
+    const updatedGuest: Guest = {
+      ...editingGuest,
+      name: cleanName,
+      phone: formPhone.trim(),
+      category: formCategory,
+      paxAllocated: validPax,
+      notes: formNotes.trim(),
+      customGreeting: formCustomGreeting.trim(),
+      invitationSent: Boolean(editingGuest.invitationSent)
+    };
+
+    // Immediately update in state & localStorage cache
+    upsertGuestDirectly(updatedGuest);
+    setEditingGuest(null);
+    resetForm();
+    showToast(`Data tamu "${cleanName}" berhasil diperbarui!`);
+
     try {
       const res = await fetch(`/api/admin/guests/${editingGuest.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: formName.trim(),
-          phone: formPhone.trim(),
-          category: formCategory,
-          paxAllocated: formPax,
-          notes: formNotes.trim(),
-          customGreeting: formCustomGreeting.trim(),
-          invitationSent: editingGuest.invitationSent
+          id: editingGuest.id,
+          slug: editingGuest.slug,
+          name: updatedGuest.name,
+          phone: updatedGuest.phone,
+          category: updatedGuest.category,
+          paxAllocated: updatedGuest.paxAllocated,
+          notes: updatedGuest.notes,
+          customGreeting: updatedGuest.customGreeting,
+          invitationSent: updatedGuest.invitationSent
         })
       });
-      if (res.ok) {
-        setEditingGuest(null);
-        resetForm();
-        onRefresh();
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data.guest) {
+          upsertGuestDirectly(data.guest);
+        }
       }
+      onRefresh();
     } catch (err) {
-      console.error('Failed to update guest:', err);
+      console.error('Failed to update guest on server, saved in local cache:', err);
     } finally {
       setFormLoading(false);
     }
   };
 
   const handleDeleteGuest = async (id: string) => {
+    const target = guests.find((g) => g.id === id);
     setConfirmDeleteGuestId(null);
+    removeGuestDirectly(id);
+    if (target) {
+      showToast(`Tamu "${target.name}" telah dihapus dari daftar.`);
+    }
     try {
       const res = await fetch(`/api/admin/guests/${id}`, { method: 'DELETE' });
       if (res.ok) {
@@ -199,11 +303,23 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
   };
 
   const handleToggleCheckin = async (guest: Guest) => {
+    const nextCheckedIn = !guest.checkedIn;
+    const updatedGuest: Guest = {
+      ...guest,
+      checkedIn: nextCheckedIn,
+      checkedInAt: nextCheckedIn ? new Date().toISOString() : null
+    };
+    upsertGuestDirectly(updatedGuest);
+    showToast(
+      nextCheckedIn
+        ? `Check-In berhasil untuk "${guest.name}"!`
+        : `Status Check-In "${guest.name}" dibatalkan.`
+    );
     try {
       await fetch(`/api/admin/guests/${guest.id}/checkin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ undo: guest.checkedIn })
+        body: JSON.stringify({ undo: guest.checkedIn, guest: updatedGuest })
       });
       onRefresh();
     } catch (err) {
@@ -216,8 +332,10 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
     setFormPhone('');
     setFormCategory('Sahabat');
     setFormPax(2);
+    setFormPaxInput('2');
     setFormNotes('');
     setFormCustomGreeting('');
+    setFormError(null);
   };
 
   const openEditModal = (g: Guest) => {
@@ -226,8 +344,10 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
     setFormPhone(g.phone || '');
     setFormCategory(g.category);
     setFormPax(g.paxAllocated);
+    setFormPaxInput(String(g.paxAllocated || 2));
     setFormNotes(g.notes || '');
     setFormCustomGreeting(g.customGreeting || '');
+    setFormError(null);
   };
 
   const copyInvitationLink = (guest: Guest) => {
@@ -251,7 +371,24 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 relative">
+      {/* Floating & Inline Save Confirmation Toast */}
+      {saveToast && (
+        <div className="p-3.5 bg-emerald-900 text-white rounded-2xl shadow-lg border border-emerald-400/40 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-xs sm:text-sm font-semibold">
+            <CheckCircle2 className="w-5 h-5 text-emerald-300 shrink-0" />
+            <span>{saveToast}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSaveToast(null)}
+            className="p-1 text-emerald-200 hover:text-white rounded-lg cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Quick Statistics Banner */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <div className="bg-white p-4 rounded-2xl border border-stone-200/90 shadow-xs">
@@ -624,19 +761,36 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
 
             <form
               onSubmit={editingGuest ? handleUpdateGuest : handleCreateGuest}
-              className="flex flex-col flex-1 min-h-0 overflow-hidden"
+              noValidate
+              className="flex flex-col flex-1 min-h-0"
             >
               {/* Scrollable Form Body */}
               <div className="p-4 sm:p-5 overflow-y-auto space-y-3.5 flex-1 overscroll-contain">
+                {formError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl flex items-center justify-between gap-2">
+                    <span>{formError}</span>
+                    <button
+                      type="button"
+                      onClick={() => setFormError(null)}
+                      className="text-rose-500 hover:text-rose-800 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-[11px] font-semibold text-stone-700 uppercase tracking-wider mb-1">
                     Nama Tamu Undangan *
                   </label>
                   <input
                     type="text"
-                    required
+                    autoFocus
                     value={formName}
-                    onChange={(e) => setFormName(e.target.value)}
+                    onChange={(e) => {
+                      setFormName(e.target.value);
+                      if (formError) setFormError(null);
+                    }}
                     placeholder="Contoh: Bpk. H. Ahmad Sudirman & Partner"
                     className="w-full px-3.5 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 text-stone-800"
                   />
@@ -667,9 +821,16 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
                     <input
                       type="number"
                       min={1}
-                      max={10}
-                      value={formPax}
-                      onChange={(e) => setFormPax(Number(e.target.value))}
+                      max={100}
+                      value={formPaxInput}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setFormPaxInput(val);
+                        const num = parseInt(val, 10);
+                        if (!isNaN(num) && num >= 1) {
+                          setFormPax(num);
+                        }
+                      }}
                       className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 text-stone-800"
                     />
                   </div>
@@ -723,13 +884,15 @@ export const GuestManagementTab: React.FC<GuestManagementTabProps> = ({
                   onClick={() => {
                     setIsAddModalOpen(false);
                     setEditingGuest(null);
+                    setFormError(null);
                   }}
                   className="px-4 py-2 text-xs font-semibold text-stone-600 hover:text-stone-900 rounded-xl hover:bg-stone-200/60 transition-colors cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={editingGuest ? handleUpdateGuest : handleCreateGuest}
                   disabled={formLoading}
                   className="px-5 py-2 rounded-xl bg-amber-800 hover:bg-amber-900 active:scale-[0.99] text-white text-xs sm:text-sm font-semibold tracking-wide transition-colors cursor-pointer disabled:opacity-50 shadow-xs"
                 >

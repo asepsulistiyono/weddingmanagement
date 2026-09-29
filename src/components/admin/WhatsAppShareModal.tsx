@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { Guest, WeddingSettings } from '../../types.ts';
 import { getFullInvitationUrl } from '../../utils/slugHelper.ts';
+import { useRealtime } from '../../context/RealtimeContext.tsx';
 
 interface WhatsAppShareModalProps {
   isOpen: boolean;
@@ -31,6 +32,7 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
   settings,
   onGuestUpdated
 }) => {
+  const { upsertGuestDirectly } = useRealtime();
   if (!isOpen || !guest) return null;
 
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
@@ -135,22 +137,28 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
     setTimeout(() => setIsCopiedLink(false), 2000);
   };
 
-  // Mark invitation sent status in backend
+  // Mark invitation sent status in backend & local cache
   const updateSentStatus = async (status: boolean) => {
     setIsSavingStatus(true);
+    const updatedGuest: Guest = {
+      ...guest,
+      invitationSent: status,
+      phone: phone.trim()
+    };
+    setIsSentStatus(status);
+    upsertGuestDirectly(updatedGuest);
+    if (onGuestUpdated) onGuestUpdated();
+
     try {
-      const res = await fetch(`/api/admin/guests/${guest.id}`, {
+      await fetch(`/api/admin/guests/${guest.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          ...updatedGuest,
           invitationSent: status,
           phone: phone.trim()
         })
       });
-      if (res.ok) {
-        setIsSentStatus(status);
-        if (onGuestUpdated) onGuestUpdated();
-      }
     } catch (err) {
       console.error('Failed to update invitationSent status:', err);
     } finally {

@@ -38,7 +38,7 @@ export const WishesManagementTab: React.FC<WishesManagementTabProps> = ({
   wishes,
   onRefresh
 }) => {
-  const { settings } = useRealtime();
+  const { settings, upsertWishDirectly, removeWishDirectly, restoreTemplateWishesDirectly } = useRealtime();
   const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [replyWishId, setReplyWishId] = useState<string | null>(null);
@@ -145,19 +145,17 @@ export const WishesManagementTab: React.FC<WishesManagementTabProps> = ({
   const handleRestoreTemplates = async () => {
     setRestoringTemplates(true);
     setFeedbackMsg(null);
+    restoreTemplateWishesDirectly();
+    setFeedbackMsg(`Ucapan template untuk ${coupleDisplayName} berhasil dimunculkan kembali!`);
+    setTimeout(() => setFeedbackMsg(null), 5000);
     try {
       const res = await fetch('/api/admin/wishes/restore-templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ slug: activeSlug })
       });
-      const data = await res.json();
       if (res.ok) {
-        setFeedbackMsg(
-          data.message || `Ucapan template untuk ${coupleDisplayName} berhasil dimunculkan kembali!`
-        );
         onRefresh();
-        setTimeout(() => setFeedbackMsg(null), 5000);
       }
     } catch (err) {
       console.error('Failed to restore template wishes:', err);
@@ -166,31 +164,47 @@ export const WishesManagementTab: React.FC<WishesManagementTabProps> = ({
     }
   };
 
-  const handleCreateWish = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCreateWish = async (e?: React.FormEvent | React.MouseEvent) => {
+    if (e) e.preventDefault();
     if (!newSenderName.trim() || !newMessage.trim()) return;
     setAddingWish(true);
+
+    const newWishObj: Wish = {
+      id: `wish-${Date.now()}`,
+      senderName: newSenderName.trim(),
+      message: newMessage.trim(),
+      adminReply: newAdminReply.trim() || undefined,
+      isPinned: newIsPinned,
+      isApproved: true,
+      attendance: 'attending',
+      pax: 2,
+      reactionCount: 1,
+      createdAt: new Date().toISOString()
+    };
+
+    upsertWishDirectly(newWishObj);
+    setNewSenderName('');
+    setNewMessage('');
+    setNewAdminReply('');
+    setIsAddOpen(false);
+    setFeedbackMsg(`Ucapan baru untuk ${coupleDisplayName} berhasil ditambahkan!`);
+    setTimeout(() => setFeedbackMsg(null), 5000);
+
     try {
       const res = await fetch('/api/admin/wishes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          senderName: newSenderName.trim(),
-          message: newMessage.trim(),
-          adminReply: newAdminReply.trim() || undefined,
-          isPinned: newIsPinned,
+          senderName: newWishObj.senderName,
+          message: newWishObj.message,
+          adminReply: newWishObj.adminReply,
+          isPinned: newWishObj.isPinned,
           attendance: 'attending',
           pax: 2
         })
       });
       if (res.ok) {
-        setNewSenderName('');
-        setNewMessage('');
-        setNewAdminReply('');
-        setIsAddOpen(false);
-        setFeedbackMsg(`Ucapan baru untuk ${coupleDisplayName} berhasil ditambahkan!`);
         onRefresh();
-        setTimeout(() => setFeedbackMsg(null), 5000);
       }
     } catch (err) {
       console.error('Failed to add wish:', err);
@@ -201,6 +215,7 @@ export const WishesManagementTab: React.FC<WishesManagementTabProps> = ({
 
   const handleTogglePin = async (wish: Wish) => {
     setLoadingId(wish.id);
+    upsertWishDirectly({ ...wish, isPinned: !wish.isPinned });
     try {
       await fetch(`/api/admin/wishes/${wish.id}`, {
         method: 'PUT',
@@ -217,6 +232,7 @@ export const WishesManagementTab: React.FC<WishesManagementTabProps> = ({
 
   const handleToggleApprove = async (wish: Wish) => {
     setLoadingId(wish.id);
+    upsertWishDirectly({ ...wish, isApproved: !wish.isApproved });
     try {
       await fetch(`/api/admin/wishes/${wish.id}`, {
         method: 'PUT',
@@ -233,13 +249,14 @@ export const WishesManagementTab: React.FC<WishesManagementTabProps> = ({
 
   const handleDeleteWish = async (wish: Wish) => {
     setLoadingId(wish.id);
+    removeWishDirectly(wish.id);
+    setFeedbackMsg(
+      `Ucapan dari "${wish.senderName}" dihapus. Klik tombol "Munculkan Ucapan Template" di atas jika ingin mengembalikannya.`
+    );
+    setTimeout(() => setFeedbackMsg(null), 6000);
     try {
       await fetch(`/api/admin/wishes/${wish.id}`, { method: 'DELETE' });
-      setFeedbackMsg(
-        `Ucapan dari "${wish.senderName}" dihapus. Klik tombol "Munculkan Ucapan Template" di atas jika ingin mengembalikannya.`
-      );
       onRefresh();
-      setTimeout(() => setFeedbackMsg(null), 6000);
     } catch (err) {
       console.error('Failed to delete wish:', err);
     } finally {
@@ -250,14 +267,21 @@ export const WishesManagementTab: React.FC<WishesManagementTabProps> = ({
   const handleSaveReply = async (wishId: string) => {
     if (!replyText.trim()) return;
     setLoadingId(wishId);
+    const targetWish = wishes.find((w) => w.id === wishId);
+    if (targetWish) {
+      upsertWishDirectly({ ...targetWish, adminReply: replyText.trim() });
+    }
+    const savedReply = replyText.trim();
+    setReplyWishId(null);
+    setReplyText('');
+    setFeedbackMsg('Balasan ucapan berhasil disimpan!');
+    setTimeout(() => setFeedbackMsg(null), 4000);
     try {
       await fetch(`/api/admin/wishes/${wishId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ adminReply: replyText.trim() })
+        body: JSON.stringify({ adminReply: savedReply })
       });
-      setReplyWishId(null);
-      setReplyText('');
       onRefresh();
     } catch (err) {
       console.error('Failed to reply wish:', err);

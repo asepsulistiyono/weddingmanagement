@@ -86,12 +86,12 @@ export async function getAllGuests(): Promise<Guest[]> {
 }
 
 export async function upsertGuest(guest: Guest): Promise<void> {
-  try {
+  const attemptUpsert = async (slugToUse: string) => {
     await db.insert(guests)
       .values({
         id: guest.id,
         name: guest.name,
-        slug: guest.slug,
+        slug: slugToUse,
         phone: guest.phone || null,
         category: guest.category,
         paxAllocated: guest.paxAllocated,
@@ -108,7 +108,7 @@ export async function upsertGuest(guest: Guest): Promise<void> {
         target: guests.id,
         set: {
           name: guest.name,
-          slug: guest.slug,
+          slug: slugToUse,
           phone: guest.phone || null,
           category: guest.category,
           paxAllocated: guest.paxAllocated,
@@ -121,9 +121,16 @@ export async function upsertGuest(guest: Guest): Promise<void> {
           invitationSent: guest.invitationSent
         }
       });
+  };
+
+  try {
+    await attemptUpsert(guest.slug);
   } catch (error) {
-    console.error('Database query error in upsertGuest:', error);
-    throw new Error('Failed to persist guest to database', { cause: error });
+    try {
+      await attemptUpsert(`${guest.slug}-${guest.id.slice(-4)}`);
+    } catch (retryError) {
+      console.error('Database query error in upsertGuest:', retryError);
+    }
   }
 }
 

@@ -1186,20 +1186,25 @@ app.get('/api/admin/guests', (req, res) => {
 
 // Add Guest
 app.post('/api/admin/guests', (req, res) => {
-  const { name, phone, category, paxAllocated, notes, customGreeting } = req.body;
+  const { id: requestedId, slug: requestedSlug, name, phone, category, paxAllocated, notes, customGreeting } = req.body;
   if (!name) {
     return res.status(400).json({ error: 'Nama tamu wajib diisi.' });
   }
 
-  const baseSlug = String(name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const baseSlug =
+    (requestedSlug ? String(requestedSlug).trim() : String(name).trim())
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || `tamu-${Date.now()}`;
   let slug = baseSlug;
   let counter = 1;
-  while (guests.some(g => g.slug === slug)) {
+  while (guests.some(g => g.slug === slug && g.id !== requestedId)) {
     slug = `${baseSlug}-${counter++}`;
   }
 
+  const guestId = requestedId ? String(requestedId) : `g-${Date.now()}`;
   const newGuest: Guest = {
-    id: `g-${Date.now()}`,
+    id: guestId,
     name: String(name).trim(),
     slug,
     phone: phone || '',
@@ -1215,7 +1220,12 @@ app.post('/api/admin/guests', (req, res) => {
     createdAt: new Date().toISOString()
   };
 
-  guests.unshift(newGuest);
+  const existingIdx = guests.findIndex(g => g.id === guestId);
+  if (existingIdx >= 0) {
+    guests[existingIdx] = { ...guests[existingIdx], ...newGuest };
+  } else {
+    guests.unshift(newGuest);
+  }
   dbRepo.upsertGuest(newGuest).catch(err => console.error('DB Guest add error:', err));
   broadcast({
     type: 'GUEST_UPDATED',
@@ -1342,22 +1352,44 @@ app.get('/api/admin/template/guests-txt', (req, res) => {
 
 // Update Guest
 app.put('/api/admin/guests/:id', (req, res) => {
-  const guest = guests.find(g => g.id === req.params.id);
+  const { name, slug, phone, category, paxAllocated, rsvpStatus, paxConfirmed, notes, invitationSent, customGreeting } = req.body;
+  let guest = guests.find(g => g.id === req.params.id);
+
   if (!guest) {
-    return res.status(404).json({ error: 'Tamu tidak ditemukan.' });
+    const fallbackName = name ? String(name).trim() : 'Tamu Undangan';
+    const baseSlug =
+      (slug ? String(slug).trim() : fallbackName)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || `tamu-${Date.now()}`;
+    guest = {
+      id: req.params.id,
+      name: fallbackName,
+      slug: baseSlug,
+      phone: phone ? String(phone).trim() : '',
+      category: category || 'Sahabat',
+      paxAllocated: paxAllocated !== undefined ? Number(paxAllocated) : 2,
+      rsvpStatus: rsvpStatus || 'unconfirmed',
+      paxConfirmed: paxConfirmed !== undefined ? Number(paxConfirmed) : 0,
+      checkedIn: false,
+      checkedInAt: null,
+      notes: notes || '',
+      invitationSent: Boolean(invitationSent),
+      customGreeting: customGreeting || '',
+      createdAt: new Date().toISOString()
+    };
+    guests.unshift(guest);
+  } else {
+    if (name !== undefined) guest.name = String(name).trim();
+    if (phone !== undefined) guest.phone = String(phone).trim();
+    if (category !== undefined) guest.category = category;
+    if (paxAllocated !== undefined) guest.paxAllocated = Number(paxAllocated);
+    if (rsvpStatus !== undefined) guest.rsvpStatus = rsvpStatus;
+    if (paxConfirmed !== undefined) guest.paxConfirmed = Number(paxConfirmed);
+    if (notes !== undefined) guest.notes = notes;
+    if (invitationSent !== undefined) guest.invitationSent = Boolean(invitationSent);
+    if (customGreeting !== undefined) guest.customGreeting = customGreeting;
   }
-
-  const { name, phone, category, paxAllocated, rsvpStatus, paxConfirmed, notes, invitationSent, customGreeting } = req.body;
-
-  if (name !== undefined) guest.name = String(name).trim();
-  if (phone !== undefined) guest.phone = String(phone).trim();
-  if (category !== undefined) guest.category = category;
-  if (paxAllocated !== undefined) guest.paxAllocated = Number(paxAllocated);
-  if (rsvpStatus !== undefined) guest.rsvpStatus = rsvpStatus;
-  if (paxConfirmed !== undefined) guest.paxConfirmed = Number(paxConfirmed);
-  if (notes !== undefined) guest.notes = notes;
-  if (invitationSent !== undefined) guest.invitationSent = Boolean(invitationSent);
-  if (customGreeting !== undefined) guest.customGreeting = customGreeting;
 
   dbRepo.upsertGuest(guest).catch(err => console.error('DB Guest update error:', err));
   broadcast({
@@ -1371,22 +1403,25 @@ app.put('/api/admin/guests/:id', (req, res) => {
 // Delete Guest
 app.delete('/api/admin/guests/:id', (req, res) => {
   const index = guests.findIndex(g => g.id === req.params.id);
-  if (index === -1) {
-    return res.status(404).json({ error: 'Tamu tidak ditemukan.' });
+  if (index !== -1) {
+    guests.splice(index, 1);
   }
-  guests.splice(index, 1);
   dbRepo.deleteGuest(req.params.id).catch(err => console.error('DB Guest delete error:', err));
   res.json({ success: true });
 });
 
 // Check-in Scanner API (Reception Desk)
 app.post('/api/admin/guests/:id/checkin', (req, res) => {
-  const guest = guests.find(g => g.id === req.params.id || g.slug === req.params.id);
+  const { undo, guest: incomingGuest } = req.body || {};
+  let guest = guests.find(g => g.id === req.params.id || g.slug === req.params.id);
+  if (!guest && incomingGuest && incomingGuest.id) {
+    guest = { ...incomingGuest };
+    guests.unshift(guest!);
+  }
   if (!guest) {
     return res.status(404).json({ error: 'Tamu tidak ditemukan dengan ID atau kode tersebut.' });
   }
 
-  const { undo } = req.body;
   if (undo) {
     guest.checkedIn = false;
     guest.checkedInAt = null;
