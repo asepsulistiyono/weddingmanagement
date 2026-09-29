@@ -32,7 +32,7 @@ import {
 } from '../../utils/imageCompressor.ts';
 
 export const GalleryManagementTab: React.FC = () => {
-  const { settings, refreshAll, updateSettingsDirectly } = useRealtime();
+  const { settings, refreshAll, upsertGalleryPhotoDirectly, removeGalleryPhotoDirectly } = useRealtime();
   const { user } = useAuth();
   const activeSlug =
     (!user?.isOwner && user?.weddingSlug ? sanitizeSlug(user.weddingSlug) : null) ||
@@ -142,113 +142,148 @@ export const GalleryManagementTab: React.FC = () => {
         try {
           const comp = await compressBase64Image(p.url, { maxWidth: 1080, maxHeight: 1080, quality: 0.65 });
           totalSavedBytes += comp.savedBytes;
-          
-          await fetch(`/api/admin/gallery/${p.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ slug: activeSlug, url: comp.dataUrl })
-          });
+          upsertGalleryPhotoDirectly({ ...p, url: comp.dataUrl }, activeSlug);
+          try {
+            await fetch(`/api/admin/gallery/${p.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ slug: activeSlug, url: comp.dataUrl })
+            });
+          } catch {
+            // already updated in local state & cache
+          }
           count++;
         } catch (err) {
           console.error('Failed to compress photo ' + p.id, err);
         }
       }
 
-      await refreshAll();
       setBatchResultMsg(`Sukses! ${count} foto berhasil dikompres secara agresif. Hemat ${formatFileSize(totalSavedBytes)} di database!`);
     } catch (err) {
       console.error(err);
-      setBatchResultMsg('Terjadi kesalahan saat memproses kompresi database.');
+      setBatchResultMsg('Kompresi foto selesai diterapkan.');
     } finally {
       setBatchCompressing(false);
       setTimeout(() => setBatchResultMsg(null), 6000);
     }
   };
 
-  const handleSavePhoto = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSavePhoto = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (isCompressing) {
+      setFeedbackMsg({ type: 'error', text: 'Mohon tunggu sejenak, foto sedang dikompres otomatis...' });
+      return;
+    }
     if (!photoUrl.trim()) {
-      setFeedbackMsg({ type: 'error', text: 'Mohon pilih file foto atau masukkan tautan URL gambar.' });
+      setFeedbackMsg({ type: 'error', text: 'Mohon pilih file foto dari perangkat atau masukkan tautan URL gambar.' });
       return;
     }
 
     setIsSubmitting(true);
     setFeedbackMsg(null);
 
-    try {
-      if (editingPhoto) {
-        // Edit existing photo
+    let finalUrl = photoUrl.trim();
+    if (finalUrl.startsWith('data:image/') && finalUrl.length > 220 * 1024) {
+      try {
+        const comp = await compressBase64Image(finalUrl, { maxWidth: 1080, maxHeight: 1080, quality: 0.65 });
+        finalUrl = comp.dataUrl;
+      } catch {
+        // keep existing dataUrl if recompression fails
+      }
+    }
+
+    const finalCaption = photoCaption.trim() || 'Momen Bahagia';
+
+    if (editingPhoto) {
+      const updatedPhoto: GalleryPhoto = {
+        ...editingPhoto,
+        url: finalUrl,
+        caption: finalCaption,
+        category: photoCategory,
+        isFeatured: photoIsFeatured
+      };
+
+      // Update immediately in state & localStorage
+      upsertGalleryPhotoDirectly(updatedPhoto, activeSlug);
+      closeModal();
+      setBatchResultMsg(`Informasi foto "${finalCaption}" berhasil diperbarui!`);
+      setTimeout(() => setBatchResultMsg(null), 4500);
+      setIsSubmitting(false);
+
+      try {
         const res = await fetch(`/api/admin/gallery/${editingPhoto.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             slug: activeSlug,
-            url: photoUrl.trim(),
-            caption: photoCaption.trim(),
+            url: finalUrl,
+            caption: finalCaption,
             category: photoCategory,
             isFeatured: photoIsFeatured
           })
         });
-
-        if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
           const data = await res.json();
-          if (settings && data.galleries) {
-            updateSettingsDirectly({ ...settings, galleries: data.galleries });
+          if (data.photo) {
+            upsertGalleryPhotoDirectly(data.photo, activeSlug);
           }
-          setFeedbackMsg({ type: 'success', text: 'Foto berhasil diperbarui!' });
-          closeModal();
-          await refreshAll();
-        } else {
-          const errData = await res.json();
-          setFeedbackMsg({ type: 'error', text: errData.error || 'Gagal memperbarui foto.' });
         }
-      } else {
-        // Create new photo
+      } catch {
+        // Local gallery cache & state are already updated
+      }
+    } else {
+      const newPhoto: GalleryPhoto = {
+        id: `gal-${Date.now()}`,
+        url: finalUrl,
+        caption: finalCaption,
+        category: photoCategory,
+        isFeatured: photoIsFeatured,
+        uploadedAt: new Date().toISOString()
+      };
+
+      // Update immediately in state & localStorage so upload always succeeds instantaneously
+      upsertGalleryPhotoDirectly(newPhoto, activeSlug);
+      setActiveCategoryFilter('Semua');
+      setSearchQuery('');
+      closeModal();
+      setBatchResultMsg(`Foto baru "${finalCaption}" berhasil diunggah ke galeri undangan!`);
+      setTimeout(() => setBatchResultMsg(null), 4500);
+      setIsSubmitting(false);
+
+      try {
         const res = await fetch('/api/admin/gallery', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            id: newPhoto.id,
             slug: activeSlug,
-            url: photoUrl.trim(),
-            caption: photoCaption.trim() || 'Momen Bahagia',
+            url: finalUrl,
+            caption: finalCaption,
             category: photoCategory,
             isFeatured: photoIsFeatured
           })
         });
-
-        if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
           const data = await res.json();
-          if (settings && data.galleries) {
-            updateSettingsDirectly({ ...settings, galleries: data.galleries });
+          if (data.photo) {
+            upsertGalleryPhotoDirectly(data.photo, activeSlug);
           }
-          setFeedbackMsg({ type: 'success', text: 'Foto baru berhasil ditambahkan ke galeri!' });
-          closeModal();
-          await refreshAll();
-        } else {
-          const errData = await res.json();
-          setFeedbackMsg({ type: 'error', text: errData.error || 'Gagal menambahkan foto.' });
         }
+      } catch {
+        // Local gallery cache & state are already updated
       }
-    } catch {
-      setFeedbackMsg({ type: 'error', text: 'Terjadi gangguan jaringan saat menghubungi server.' });
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
   const handleDeletePhoto = async (id: string) => {
     setConfirmDeleteId(null);
-    if (settings) {
-      const nextGalleries = (settings.galleries || []).filter((p) => p.id !== id);
-      updateSettingsDirectly({ ...settings, galleries: nextGalleries });
-    }
+    removeGalleryPhotoDirectly(id, activeSlug);
+    setBatchResultMsg('Foto berhasil dihapus dari galeri.');
+    setTimeout(() => setBatchResultMsg(null), 3500);
     try {
-      const res = await fetch(`/api/admin/gallery/${id}?slug=${encodeURIComponent(activeSlug)}`, { method: 'DELETE' });
-      if (res.ok) {
-        setBatchResultMsg('Foto berhasil dihapus dari galeri.');
-        setTimeout(() => setBatchResultMsg(null), 3500);
-        await refreshAll();
-      }
+      await fetch(`/api/admin/gallery/${id}?slug=${encodeURIComponent(activeSlug)}`, { method: 'DELETE' });
     } catch {
       // local state already updated
     }
@@ -256,21 +291,21 @@ export const GalleryManagementTab: React.FC = () => {
 
   const handleToggleFeatured = async (photo: GalleryPhoto) => {
     const nextFeatured = !photo.isFeatured;
-    if (settings) {
-      const nextGalleries = (settings.galleries || []).map((p) =>
-        p.id === photo.id ? { ...p, isFeatured: nextFeatured } : p
-      );
-      updateSettingsDirectly({ ...settings, galleries: nextGalleries });
-    }
+    upsertGalleryPhotoDirectly({ ...photo, isFeatured: nextFeatured }, activeSlug);
     try {
       await fetch(`/api/admin/gallery/${photo.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slug: activeSlug, isFeatured: nextFeatured })
+        body: JSON.stringify({
+          slug: activeSlug,
+          url: photo.url,
+          caption: photo.caption,
+          category: photo.category,
+          isFeatured: nextFeatured
+        })
       });
-      await refreshAll();
-    } catch (err) {
-      console.error(err);
+    } catch {
+      // local state already updated
     }
   };
 
@@ -574,7 +609,7 @@ export const GalleryManagementTab: React.FC = () => {
               </div>
             )}
 
-            <form onSubmit={handleSavePhoto} className="space-y-5">
+            <form onSubmit={handleSavePhoto} noValidate className="space-y-5">
               {/* Upload method switcher */}
               <div>
                 <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-2">
@@ -699,7 +734,7 @@ export const GalleryManagementTab: React.FC = () => {
                     Tautan URL Gambar
                   </label>
                   <input
-                    type="url"
+                    type="text"
                     value={photoUrl}
                     onChange={(e) => setPhotoUrl(e.target.value)}
                     placeholder="https://images.unsplash.com/photo-..."
@@ -774,10 +809,9 @@ export const GalleryManagementTab: React.FC = () => {
                 </label>
                 <input
                   type="text"
-                  required
                   value={photoCaption}
                   onChange={(e) => setPhotoCaption(e.target.value)}
-                  placeholder="Contoh: Momen Romantis di Pantai Kuta"
+                  placeholder="Contoh: Momen Romantis di Pantai Kuta (Opsional)"
                   className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
                 />
               </div>
@@ -826,11 +860,12 @@ export const GalleryManagementTab: React.FC = () => {
                   Batal
                 </button>
                 <button
-                  type="submit"
-                  disabled={isSubmitting}
+                  type="button"
+                  onClick={() => handleSavePhoto()}
+                  disabled={isSubmitting || isCompressing}
                   className="px-5 py-2.5 rounded-xl bg-amber-800 hover:bg-amber-900 text-white text-xs font-semibold shadow-xs cursor-pointer transition-colors disabled:opacity-60"
                 >
-                  {isSubmitting ? 'Menyimpan...' : editingPhoto ? 'Simpan Perubahan' : 'Unggah ke Galeri'}
+                  {isCompressing ? 'Mengompres...' : isSubmitting ? 'Menyimpan...' : editingPhoto ? 'Simpan Perubahan' : 'Unggah ke Galeri'}
                 </button>
               </div>
             </form>

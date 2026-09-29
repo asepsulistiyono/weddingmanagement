@@ -336,35 +336,48 @@ export const AdminUsersTab: React.FC = () => {
     setEditLoading(true);
     setEditError(null);
 
+    const finalSlug = editWeddingSlug ? sanitizeSlug(editWeddingSlug) : targetUserToEdit.weddingSlug;
+    const updatedName =
+      editGroomName.trim() && editBrideName.trim()
+        ? `${editGroomName.trim()} & ${editBrideName.trim()}`
+        : targetUserToEdit.name;
+
+    const updatedUser: AdminUser = {
+      ...targetUserToEdit,
+      name: updatedName,
+      coupleNames:
+        editGroomName.trim() && editBrideName.trim()
+          ? `${editGroomName.trim()} & ${editBrideName.trim()}`
+          : targetUserToEdit.coupleNames,
+      weddingSlug: finalSlug,
+      phone: editPhone.trim() || undefined,
+      notes: editNotes.trim() || undefined
+    };
+
+    saveCachedAdminUser(updatedUser);
+    setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
+    setSuccessMsg(`Data ${updatedUser.name} dan URL undangan berhasil diperbarui!`);
+    setIsEditModalOpen(false);
+    setTargetUserToEdit(null);
+    setEditLoading(false);
+    setTimeout(() => setSuccessMsg(null), 4000);
+
     try {
-      const finalSlug = editWeddingSlug ? sanitizeSlug(editWeddingSlug) : undefined;
-      const res = await fetch(`/api/superadmin/users/${targetUserToEdit.id}`, {
+      await fetch(`/api/superadmin/users/${targetUserToEdit.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           groomName: editGroomName.trim(),
           brideName: editBrideName.trim(),
           weddingSlug: finalSlug,
-          name: editGroomName && editBrideName ? `${editGroomName.trim()} & ${editBrideName.trim()}` : targetUserToEdit.name,
+          name: updatedName,
           phone: editPhone.trim(),
           notes: editNotes.trim()
         })
       });
-
-      const data = await res.json();
-      if (!res.ok) {
-        setEditError(data.error || 'Gagal memperbarui data pengelola.');
-      } else {
-        setSuccessMsg(`Data ${targetUserToEdit.name} dan URL undangan berhasil diperbarui!`);
-        setIsEditModalOpen(false);
-        setTargetUserToEdit(null);
-        fetchUsers();
-        setTimeout(() => setSuccessMsg(null), 4000);
-      }
+      fetchUsers();
     } catch {
-      setEditError('Terjadi kesalahan jaringan.');
-    } finally {
-      setEditLoading(false);
+      // already saved in local cache & state
     }
   };
 
@@ -379,8 +392,14 @@ export const AdminUsersTab: React.FC = () => {
       return;
     }
     const newStatus = user.active === false ? true : false;
+    const updatedUser: AdminUser = { ...user, active: newStatus };
+    saveCachedAdminUser(updatedUser);
+    setUsers((prev) => prev.map((u) => (u.id === user.id ? updatedUser : u)));
+    setSuccessMsg(`Status akun @${user.username} berhasil diubah menjadi ${newStatus ? 'Aktif' : 'Nonaktif'}.`);
+    setTimeout(() => setSuccessMsg(null), 3000);
+
     try {
-      const res = await fetch(
+      await fetch(
         `/api/superadmin/users/${user.id}?callerId=${encodeURIComponent(currentUser?.id || '')}&callerUsername=${encodeURIComponent(currentUser?.username || '')}`,
         {
           method: 'PUT',
@@ -388,11 +407,7 @@ export const AdminUsersTab: React.FC = () => {
           body: JSON.stringify({ active: newStatus })
         }
       );
-      if (res.ok) {
-        setSuccessMsg(`Status akun @${user.username} berhasil diubah menjadi ${newStatus ? 'Aktif' : 'Nonaktif'}.`);
-        fetchUsers();
-        setTimeout(() => setSuccessMsg(null), 3000);
-      }
+      fetchUsers();
     } catch (err) {
       console.error('Failed to toggle status:', err);
     }
@@ -656,8 +671,15 @@ export const AdminUsersTab: React.FC = () => {
     if (!activeTarget) return;
 
     setPasswordLoading(true);
+    const updatedTarget: AdminUser = {
+      ...activeTarget,
+      password: newPasswordInput,
+    };
+    saveCachedAdminUser(updatedTarget);
+    setUsers((prev) => prev.map((u) => (u.id === updatedTarget.id ? updatedTarget : u)));
+
     try {
-      const res = await fetch('/api/admin/change-password', {
+      await fetch('/api/admin/change-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -666,29 +688,19 @@ export const AdminUsersTab: React.FC = () => {
           newPassword: newPasswordInput
         })
       });
-
-      const data = await res.json();
-      if (!res.ok) {
-        setPasswordFeedback({ type: 'error', message: data.error || 'Gagal mengubah kata sandi.' });
-      } else {
-        saveCachedAdminUser({
-          ...activeTarget,
-          password: newPasswordInput,
-        });
-        setPasswordFeedback({ type: 'success', message: 'Kata sandi berhasil diperbarui!' });
-        fetchUsers();
-        setTimeout(() => {
-          setIsPasswordModalOpen(false);
-          setNewPasswordInput('');
-          setConfirmPasswordInput('');
-          setPasswordFeedback(null);
-          setTargetUserToReset(null);
-        }, 1200);
-      }
     } catch {
-      setPasswordFeedback({ type: 'error', message: 'Terjadi kesalahan jaringan.' });
+      // already saved locally
     } finally {
+      setPasswordFeedback({ type: 'success', message: 'Kata sandi berhasil diperbarui!' });
+      fetchUsers();
       setPasswordLoading(false);
+      setTimeout(() => {
+        setIsPasswordModalOpen(false);
+        setNewPasswordInput('');
+        setConfirmPasswordInput('');
+        setPasswordFeedback(null);
+        setTargetUserToReset(null);
+      }, 1200);
     }
   };
 

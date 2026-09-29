@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
-import type { Wish, WeddingSettings, RealtimeMessage, Guest } from '../types.ts';
+import type { Wish, WeddingSettings, RealtimeMessage, Guest, GalleryPhoto } from '../types.ts';
 import { parseWeddingAndGuestFromUrl } from '../utils/slugHelper.ts';
 
 interface RealtimeContextType {
@@ -22,6 +22,8 @@ interface RealtimeContextType {
   fetchGuests: () => Promise<void>;
   refreshAll: () => Promise<void>;
   updateSettingsDirectly: (newSettings: WeddingSettings) => void;
+  upsertGalleryPhotoDirectly: (photo: GalleryPhoto, slug?: string) => void;
+  removeGalleryPhotoDirectly: (photoId: string, slug?: string) => void;
   upsertGuestDirectly: (guestItem: Guest) => void;
   addGuestsBatchDirectly: (newGuests: Guest[]) => void;
   removeGuestDirectly: (guestId: string) => void;
@@ -296,6 +298,78 @@ function saveCachedWishes(list: Wish[]) {
   }
 }
 
+function getGalleryCacheKey(slugKey: string): string {
+  return `wedding_gallery_cache_${slugKey || 'default'}`;
+}
+
+function getDeletedGalleryKey(slugKey: string): string {
+  return `wedding_deleted_gallery_${slugKey || 'default'}`;
+}
+
+function loadCachedGalleries(slugKey: string): GalleryPhoto[] {
+  const deleted = getDeletedIds(getDeletedGalleryKey(slugKey));
+  try {
+    const raw = localStorage.getItem(getGalleryCacheKey(slugKey));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((p: GalleryPhoto) => p && p.id && !deleted.has(p.id));
+      }
+    }
+    const settingsRaw = localStorage.getItem(`wedding_settings_cache_${slugKey || 'default'}`);
+    if (settingsRaw) {
+      const parsedSettings = JSON.parse(settingsRaw) as WeddingSettings;
+      if (Array.isArray(parsedSettings?.galleries)) {
+        return parsedSettings.galleries.filter((p) => p && p.id && !deleted.has(p.id));
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+function saveCachedGalleries(slugKey: string, galleries: GalleryPhoto[]) {
+  try {
+    localStorage.setItem(getGalleryCacheKey(slugKey), JSON.stringify(galleries));
+  } catch {
+    // If quota is tight, keep the 25 most recent photos
+    try {
+      localStorage.setItem(getGalleryCacheKey(slugKey), JSON.stringify(galleries.slice(0, 25)));
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function mergeServerAndLocalGalleries(
+  slugKey: string,
+  serverGalleries: GalleryPhoto[] = [],
+  localGalleries?: GalleryPhoto[]
+): GalleryPhoto[] {
+  const deleted = getDeletedIds(getDeletedGalleryKey(slugKey));
+  const cached = localGalleries && localGalleries.length > 0 ? localGalleries : loadCachedGalleries(slugKey);
+  const byId = new Map<string, GalleryPhoto>();
+
+  for (const p of cached) {
+    if (p && p.id && !deleted.has(p.id)) {
+      byId.set(p.id, p);
+    }
+  }
+
+  for (const sp of serverGalleries) {
+    if (!sp || !sp.id || deleted.has(sp.id)) continue;
+    const existingLocal = byId.get(sp.id);
+    if (existingLocal) {
+      byId.set(sp.id, { ...sp, ...existingLocal });
+    } else {
+      byId.set(sp.id, sp);
+    }
+  }
+
+  return Array.from(byId.values());
+}
+
 function resolveActiveWeddingSlug(): { weddingSlug: string | null; guestSlug: string | null } {
   const fromUrl = parseWeddingAndGuestFromUrl();
   if (fromUrl.weddingSlug) {
@@ -500,20 +574,84 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, []);
 
   const updateSettingsDirectly = useCallback((newSettings: WeddingSettings) => {
-    setSettings(newSettings);
-    settingsRef.current = newSettings;
-    if (newSettings.announcement !== undefined) {
-      setAnnouncement(newSettings.announcement);
+    const slugKey = newSettings.slug || resolveActiveWeddingSlug().weddingSlug || 'default';
+    const mergedGalleries = Array.isArray(newSettings.galleries)
+      ? mergeServerAndLocalGalleries(slugKey, [], newSettings.galleries)
+      : loadCachedGalleries(slugKey);
+    const finalSettings: WeddingSettings = {
+      ...newSettings,
+      galleries: mergedGalleries
+    };
+    setSettings(finalSettings);
+    settingsRef.current = finalSettings;
+    if (finalSettings.announcement !== undefined) {
+      setAnnouncement(finalSettings.announcement);
     }
+    saveCachedGalleries(slugKey, mergedGalleries);
     try {
-      const slugKey = newSettings.slug || resolveActiveWeddingSlug().weddingSlug || 'default';
-      localStorage.setItem(`wedding_settings_cache_${slugKey}`, JSON.stringify(newSettings));
-      if (newSettings.slug) {
-        sessionStorage.setItem('wedding_active_slug', newSettings.slug);
+      localStorage.setItem(`wedding_settings_cache_${slugKey}`, JSON.stringify(finalSettings));
+      if (finalSettings.slug) {
+        sessionStorage.setItem('wedding_active_slug', finalSettings.slug);
       }
     } catch {
       // ignore storage quota errors
     }
+  }, []);
+
+  const upsertGalleryPhotoDirectly = useCallback((photo: GalleryPhoto, explicitSlug?: string) => {
+    if (!photo || !photo.id) return;
+    const slugKey = explicitSlug || settingsRef.current?.slug || resolveActiveWeddingSlug().weddingSlug || 'default';
+    removeDeletedId(getDeletedGalleryKey(slugKey), photo.id);
+
+    const currentGalleries =
+      settingsRef.current?.galleries && settingsRef.current.galleries.length > 0
+        ? settingsRef.current.galleries
+        : loadCachedGalleries(slugKey);
+
+    const exists = currentGalleries.some((p) => p.id === photo.id);
+    const nextGalleries = exists
+      ? currentGalleries.map((p) => (p.id === photo.id ? { ...p, ...photo } : p))
+      : [photo, ...currentGalleries];
+
+    saveCachedGalleries(slugKey, nextGalleries);
+
+    setSettings((prev) => {
+      if (!prev) return prev;
+      const updated = { ...prev, galleries: nextGalleries };
+      settingsRef.current = updated;
+      try {
+        localStorage.setItem(`wedding_settings_cache_${slugKey}`, JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
+  }, []);
+
+  const removeGalleryPhotoDirectly = useCallback((photoId: string, explicitSlug?: string) => {
+    if (!photoId) return;
+    const slugKey = explicitSlug || settingsRef.current?.slug || resolveActiveWeddingSlug().weddingSlug || 'default';
+    addDeletedId(getDeletedGalleryKey(slugKey), photoId);
+
+    const currentGalleries =
+      settingsRef.current?.galleries && settingsRef.current.galleries.length > 0
+        ? settingsRef.current.galleries
+        : loadCachedGalleries(slugKey);
+
+    const nextGalleries = currentGalleries.filter((p) => p.id !== photoId);
+    saveCachedGalleries(slugKey, nextGalleries);
+
+    setSettings((prev) => {
+      if (!prev) return prev;
+      const updated = { ...prev, galleries: nextGalleries };
+      settingsRef.current = updated;
+      try {
+        localStorage.setItem(`wedding_settings_cache_${slugKey}`, JSON.stringify(updated));
+      } catch {
+        // ignore
+      }
+      return updated;
+    });
   }, []);
 
   const refreshData = useCallback(async () => {
@@ -532,25 +670,31 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
         let resolvedSettings: WeddingSettings = data.settings;
+        const effectiveSlugKey = resolvedSettings?.slug || slugKey;
         try {
-          const cachedRaw = localStorage.getItem(`wedding_settings_cache_${slugKey}`);
+          const cachedRaw = localStorage.getItem(`wedding_settings_cache_${effectiveSlugKey}`) || localStorage.getItem(`wedding_settings_cache_${slugKey}`);
           if (cachedRaw) {
             const cached = JSON.parse(cachedRaw) as WeddingSettings;
-            // If server returned uncustomized default template while local cache has user's saved customizations for this slug, merge them
             if (cached && (!cached.slug || cached.slug === slugKey || cached.slug === resolvedSettings?.slug)) {
               resolvedSettings = {
                 ...resolvedSettings,
                 ...cached,
-                galleries:
-                  (resolvedSettings?.galleries && resolvedSettings.galleries.length > 0)
-                    ? resolvedSettings.galleries
-                    : cached.galleries || [],
               };
             }
           }
         } catch {
           // ignore cache parse error
         }
+        const mergedGalleries = mergeServerAndLocalGalleries(
+          effectiveSlugKey,
+          data.settings?.galleries || [],
+          resolvedSettings?.galleries
+        );
+        resolvedSettings = {
+          ...resolvedSettings,
+          galleries: mergedGalleries
+        };
+        saveCachedGalleries(effectiveSlugKey, mergedGalleries);
         setSettings(resolvedSettings);
         settingsRef.current = resolvedSettings;
 
@@ -777,9 +921,13 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 }
                 break;
 
-              case 'GALLERY_UPDATED':
-                setSettings((prev) => prev ? { ...prev, galleries: data.payload } : null);
+              case 'GALLERY_UPDATED': {
+                const slugKey = currentSlug || settingsRef.current?.slug || 'default';
+                const merged = mergeServerAndLocalGalleries(slugKey, data.payload || []);
+                saveCachedGalleries(slugKey, merged);
+                setSettings((prev) => (prev ? { ...prev, galleries: merged } : null));
                 break;
+              }
 
               case 'BROADCAST_ANNOUNCEMENT':
                 setAnnouncement({
@@ -1006,6 +1154,8 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         fetchGuests,
         refreshAll,
         updateSettingsDirectly,
+        upsertGalleryPhotoDirectly,
+        removeGalleryPhotoDirectly,
         upsertGuestDirectly,
         addGuestsBatchDirectly,
         removeGuestDirectly,

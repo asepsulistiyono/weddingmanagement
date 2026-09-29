@@ -21,7 +21,8 @@ const app = express();
 const server = http.createServer(app);
 const PORT = Number(process.env.PORT || 3000);
 
-app.use(express.json({ limit: '20mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // In-memory persistent state (can also store to disk or persist during lifetime)
 let weddingSettings: WeddingSettings = {
@@ -1574,7 +1575,7 @@ app.get('/api/public/gallery', (req, res) => {
 
 // Admin add new photo to gallery
 app.post('/api/admin/gallery', (req, res) => {
-  const { url, caption, category, isFeatured, slug } = req.body;
+  const { id: requestedId, url, caption, category, isFeatured, slug } = req.body;
   if (!url) {
     return res.status(400).json({ error: 'Foto atau URL gambar wajib diisi.' });
   }
@@ -1583,7 +1584,9 @@ app.post('/api/admin/gallery', (req, res) => {
   const targetSlug = activeSettings.slug || (slug ? sanitizeSlug(slug) : 'default');
 
   const newPhoto: GalleryPhoto = {
-    id: `gal-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+    id: requestedId && typeof requestedId === 'string'
+      ? requestedId
+      : `gal-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
     url: String(url).trim(),
     caption: caption ? String(caption).trim() : 'Momen Bahagia',
     category: category || 'Prewedding',
@@ -1595,7 +1598,13 @@ app.post('/api/admin/gallery', (req, res) => {
     activeSettings.galleries = [];
   }
 
-  activeSettings.galleries.unshift(newPhoto);
+  const existingIdx = activeSettings.galleries.findIndex(p => p.id === newPhoto.id);
+  if (existingIdx !== -1) {
+    activeSettings.galleries[existingIdx] = newPhoto;
+  } else {
+    activeSettings.galleries.unshift(newPhoto);
+  }
+
   weddingsMap.set(targetSlug, activeSettings);
   dbRepo.upsertGallery(newPhoto).catch(err => console.error('DB Gallery add error:', err));
   dbRepo.saveSettings(activeSettings, targetSlug).catch(err => console.error('DB Settings save error:', err));
@@ -1619,15 +1628,27 @@ app.put('/api/admin/gallery/:id', (req, res) => {
   const activeSettings = getWedding(slug);
   const targetSlug = activeSettings.slug || (slug ? sanitizeSlug(slug) : 'default');
 
-  const photo = (activeSettings.galleries || []).find(p => p.id === req.params.id);
-  if (!photo) {
-    return res.status(404).json({ error: 'Foto tidak ditemukan.' });
+  if (!activeSettings.galleries) {
+    activeSettings.galleries = [];
   }
 
-  if (url !== undefined) photo.url = String(url).trim();
-  if (caption !== undefined) photo.caption = String(caption).trim();
-  if (category !== undefined) photo.category = category;
-  if (isFeatured !== undefined) photo.isFeatured = Boolean(isFeatured);
+  let photo = activeSettings.galleries.find(p => p.id === req.params.id);
+  if (!photo) {
+    photo = {
+      id: req.params.id,
+      url: url ? String(url).trim() : '',
+      caption: caption ? String(caption).trim() : 'Momen Bahagia',
+      category: category || 'Prewedding',
+      isFeatured: Boolean(isFeatured),
+      uploadedAt: new Date().toISOString()
+    };
+    activeSettings.galleries.unshift(photo);
+  } else {
+    if (url !== undefined) photo.url = String(url).trim();
+    if (caption !== undefined) photo.caption = String(caption).trim();
+    if (category !== undefined) photo.category = category;
+    if (isFeatured !== undefined) photo.isFeatured = Boolean(isFeatured);
+  }
 
   weddingsMap.set(targetSlug, activeSettings);
   dbRepo.upsertGallery(photo).catch(err => console.error('DB Gallery update error:', err));
@@ -1654,11 +1675,10 @@ app.delete('/api/admin/gallery/:id', (req, res) => {
 
   const galleries = activeSettings.galleries || [];
   const index = galleries.findIndex(p => p.id === req.params.id);
-  if (index === -1) {
-    return res.status(404).json({ error: 'Foto tidak ditemukan.' });
+  if (index !== -1) {
+    galleries.splice(index, 1);
   }
 
-  galleries.splice(index, 1);
   weddingsMap.set(targetSlug, activeSettings);
   dbRepo.deleteGallery(req.params.id).catch(err => console.error('DB Gallery delete error:', err));
   dbRepo.saveSettings(activeSettings, targetSlug).catch(err => console.error('DB Settings save error:', err));
