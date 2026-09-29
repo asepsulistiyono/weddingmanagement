@@ -46,9 +46,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
 
-  // Owner incognito toggle (hidden by default)
+  // Owner quick login toggle (visible by default so Owner can always sign in with 1 click)
   const [shieldClicks, setShieldClicks] = useState(0);
-  const [showSecretOwnerLogin, setShowSecretOwnerLogin] = useState(false);
+  const [showSecretOwnerLogin, setShowSecretOwnerLogin] = useState(true);
 
   const handleShieldClick = () => {
     const next = shieldClicks + 1;

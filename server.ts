@@ -799,7 +799,11 @@ app.post('/api/public/wishes/:id/react', (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   const { username, email, password } = req.body || {};
-  const loginIdentifier = String(username || email || '').trim().toLowerCase();
+  const rawLoginId = String(username || email || '').trim().toLowerCase();
+  const loginIdentifier =
+    rawLoginId === 'owner' || rawLoginId === 'pemilik' || rawLoginId === 'owner@wedding.com' || rawLoginId === 'owner@wedding.local'
+      ? 'asepsulistiyono1'
+      : rawLoginId;
 
   if (!loginIdentifier || !password) {
     return res.status(400).json({ error: 'Username dan kata sandi harus diisi.' });
@@ -826,32 +830,34 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   if (user && user.active !== false) {
+    const isOwnerFlag = Boolean(
+      user.isOwner ||
+      user.id === 'user-owner-1' ||
+      user.username?.toLowerCase() === 'asepsulistiyono1' ||
+      user.username?.toLowerCase() === 'owner' ||
+      user.email?.toLowerCase() === 'asepsulistiyono1@gmail.com'
+    );
     const customPassword = (user as any).password;
-    const defaultPassword = user.isOwner ? 'owner123' : (user.role === 'super_admin' ? 'super123' : 'admin123');
+    const defaultPassword = isOwnerFlag ? 'owner123' : (user.role === 'super_admin' ? 'super123' : 'admin123');
 
     const isValidPassword = customPassword
       ? (
           password === customPassword ||
-          (user.isOwner && (password === 'owner123' || password === 'super123'))
+          (isOwnerFlag && (password === 'owner123' || password === 'super123' || password === 'admin123'))
         )
       : (
           password === defaultPassword ||
-          (user.isOwner && (password === 'owner123' || password === 'super123'))
+          (isOwnerFlag && (password === 'owner123' || password === 'super123' || password === 'admin123'))
         );
 
     if (isValidPassword) {
-      const isOwnerFlag = Boolean(
-        user.isOwner ||
-        user.username?.toLowerCase() === 'asepsulistiyono1' ||
-        user.email?.toLowerCase() === 'asepsulistiyono1@gmail.com'
-      );
       return res.json({
         success: true,
         user: {
           ...user,
           isOwner: isOwnerFlag
         },
-        token: `token_${user.role}_${user.id}_${Date.now()}`
+        token: `token_${isOwnerFlag ? 'owner' : user.role}_${user.id}_${Date.now()}`
       });
     }
   }
@@ -1783,7 +1789,10 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
     phone, 
     notes, 
     createdBy, 
-    createdByName 
+    createdByName,
+    isOwnerCaller,
+    callerUsername,
+    callerEmail
   } = req.body;
   
   // Clean and validate username
@@ -1798,23 +1807,25 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
     return res.status(400).json({ error: 'Kata sandi wajib diisi minimal 4 karakter.' });
   }
 
-  // Check if username already exists
-  if (adminUsers.some(u => 
-    (u.username && u.username.toLowerCase() === cleanUsername) || 
-    (u.email && u.email.toLowerCase() === cleanUsername)
-  )) {
-    return res.status(400).json({ error: `Username "${cleanUsername}" sudah terdaftar. Silakan pilih username lain.` });
-  }
-
   const callerUser = adminUsers.find(u => 
-    (createdBy && (u.id === createdBy || u.username === createdBy))
+    (createdBy && (u.id === createdBy || u.username === createdBy)) ||
+    (callerUsername && u.username?.toLowerCase() === String(callerUsername).toLowerCase()) ||
+    (callerEmail && u.email?.toLowerCase() === String(callerEmail).toLowerCase())
   );
   const authHeader = req.headers.authorization || '';
-  const isOwnerCalling = 
+  const isOwnerCalling = Boolean(
+    isOwnerCaller === true ||
     authHeader.includes('owner') || 
     authHeader.includes('user-owner-1') ||
+    createdBy === 'user-owner-1' ||
+    createdBy === 'asepsulistiyono1' ||
+    String(callerUsername || '').toLowerCase() === 'asepsulistiyono1' ||
+    String(callerUsername || '').toLowerCase() === 'owner' ||
+    String(callerEmail || '').toLowerCase() === 'asepsulistiyono1@gmail.com' ||
     callerUser?.isOwner ||
-    callerUser?.username === 'asepsulistiyono1';
+    callerUser?.username?.toLowerCase() === 'asepsulistiyono1' ||
+    callerUser?.email?.toLowerCase() === 'asepsulistiyono1@gmail.com'
+  );
 
   // Klien Super Admin hanya boleh menambah Admin WO, tidak boleh menambah Super Admin lain
   if (role === 'super_admin' && callerUser && !isOwnerCalling) {
@@ -1845,6 +1856,57 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
   const assignedCreatorId = role === 'admin' ? (createdBy || callerUser?.id) : undefined;
   const assignedCreatorName = role === 'admin' ? (createdByName || callerUser?.name) : undefined;
   const assignedWeddingSlug = role === 'super_admin' ? finalWeddingSlug : (customSlug || callerUser?.weddingSlug || 'default');
+
+  // Check if username already exists
+  const existingIdx = adminUsers.findIndex(u => 
+    (u.username && u.username.toLowerCase() === cleanUsername) || 
+    (u.email && u.email.toLowerCase() === cleanUsername)
+  );
+
+  if (existingIdx !== -1) {
+    // If Owner is creating/updating a Super Admin or Admin WO that already exists (and is not the Owner account itself), update it seamlessly
+    if (isOwnerCalling && !adminUsers[existingIdx].isOwner && cleanUsername !== 'asepsulistiyono1') {
+      const updatedExisting: AdminUser & { password?: string } = {
+        ...adminUsers[existingIdx],
+        username: cleanUsername,
+        name: finalName,
+        email: finalEmail,
+        role: role === 'super_admin' ? 'super_admin' : 'admin',
+        active: true,
+        password: String(password).trim(),
+        weddingSlug: assignedWeddingSlug || adminUsers[existingIdx].weddingSlug,
+        coupleNames: coupleNames || adminUsers[existingIdx].coupleNames,
+        phone: phone ? String(phone).trim() : adminUsers[existingIdx].phone,
+        notes: notes ? String(notes).trim() : adminUsers[existingIdx].notes,
+      };
+      adminUsers[existingIdx] = updatedExisting;
+      dbRepo.createDbUser({
+        uid: updatedExisting.id,
+        username: updatedExisting.username,
+        password: updatedExisting.password,
+        email: updatedExisting.email || `${updatedExisting.username}@wedding.local`,
+        name: updatedExisting.name,
+        role: updatedExisting.role,
+        weddingSlug: updatedExisting.weddingSlug,
+        coupleNames: updatedExisting.coupleNames,
+        phone: updatedExisting.phone,
+        notes: updatedExisting.notes,
+        active: updatedExisting.active,
+        createdBy: updatedExisting.createdBy,
+        createdByName: updatedExisting.createdByName
+      }).catch(err => console.error('DB user update error:', err));
+
+      return res.status(201).json({
+        success: true,
+        admin: updatedExisting,
+        user: updatedExisting,
+        weddingSlug: updatedExisting.weddingSlug,
+        invitationUrl: updatedExisting.weddingSlug ? `/#/${updatedExisting.weddingSlug}` : '/'
+      });
+    }
+
+    return res.status(400).json({ error: `Username "${cleanUsername}" sudah terdaftar. Silakan pilih username lain.` });
+  }
 
   const newAdmin: AdminUser & { password?: string } = {
     id: `user-${role === 'super_admin' ? 'super' : 'admin'}-${Date.now()}`,

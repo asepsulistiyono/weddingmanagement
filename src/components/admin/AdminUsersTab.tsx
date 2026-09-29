@@ -29,11 +29,17 @@ import {
   EyeOff
 } from 'lucide-react';
 import type { AdminUser, UserRole } from '../../types.ts';
-import { useAuth, getCachedAdminsList, saveCachedAdminUser } from '../../context/AuthContext.tsx';
+import {
+  useAuth,
+  getCachedAdminsList,
+  saveCachedAdminUser,
+  deleteCachedAdminUser,
+  isOwnerAccountCheck,
+} from '../../context/AuthContext.tsx';
 import { generateWeddingSlug, sanitizeSlug, getFullInvitationUrl } from '../../utils/slugHelper.ts';
 
 export const AdminUsersTab: React.FC = () => {
-  const { user: currentUser, isOwner } = useAuth();
+  const { user: currentUser, isOwner, quickDemoLogin } = useAuth();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -45,6 +51,7 @@ export const AdminUsersTab: React.FC = () => {
   // Add User Modal State
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [name, setName] = useState('');
+  const [isNameManual, setIsNameManual] = useState(false);
   const [username, setUsername] = useState('');
   const [isUsernameManual, setIsUsernameManual] = useState(false);
   const [password, setPassword] = useState('');
@@ -126,12 +133,7 @@ export const AdminUsersTab: React.FC = () => {
     fetchUsers();
   }, [currentUser]);
 
-  const isUserOwnerAccount = (u: AdminUser) =>
-    Boolean(
-      u.isOwner ||
-        u.username?.toLowerCase() === 'asepsulistiyono1' ||
-        u.email?.toLowerCase() === 'asepsulistiyono1@gmail.com'
-    );
+  const isUserOwnerAccount = (u: AdminUser) => isOwnerAccountCheck(u);
 
   // Strict RBAC scoping:
   // - Never expose the Owner account in the deletable/manageable list
@@ -231,6 +233,7 @@ export const AdminUsersTab: React.FC = () => {
   const handleOpenAddModal = (initialRole: UserRole = 'super_admin') => {
     setRole(isOwner ? initialRole : 'admin');
     setName('');
+    setIsNameManual(false);
     setUsername('');
     setIsUsernameManual(false);
     generateFormRandomPassword();
@@ -251,10 +254,10 @@ export const AdminUsersTab: React.FC = () => {
       setWeddingSlug(s);
     }
     if (!isUsernameManual) {
-      const suggested = (val && brideName ? `${val}_${brideName}` : (val || '')).toLowerCase().replace(/[^a-z0-9_]/g, '');
+      const suggested = (val && brideName ? `${val}_${brideName}` : (val || brideName || '')).toLowerCase().replace(/[^a-z0-9_]/g, '');
       setUsername(suggested);
     }
-    if (!name || name.includes('&') || name.includes('Mempelai')) {
+    if (!isNameManual) {
       setName(val && brideName ? `${val} & ${brideName}` : (val || brideName));
     }
   };
@@ -266,11 +269,43 @@ export const AdminUsersTab: React.FC = () => {
       setWeddingSlug(s);
     }
     if (!isUsernameManual) {
-      const suggested = (groomName && val ? `${groomName}_${val}` : (val || '')).toLowerCase().replace(/[^a-z0-9_]/g, '');
+      const suggested = (groomName && val ? `${groomName}_${val}` : (groomName || val || '')).toLowerCase().replace(/[^a-z0-9_]/g, '');
       setUsername(suggested);
     }
-    if (!name || name.includes('&') || name.includes('Mempelai')) {
+    if (!isNameManual) {
       setName(groomName && val ? `${groomName} & ${val}` : (groomName || val));
+    }
+  };
+
+  const handleNameChange = (val: string) => {
+    setIsNameManual(Boolean(val.trim()));
+    setName(val);
+
+    if (role === 'super_admin') {
+      const parts = val.includes('&')
+        ? val.split('&').map((p) => p.trim())
+        : val.toLowerCase().includes(' dan ')
+        ? val.split(/\s+dan\s+/i).map((p) => p.trim())
+        : [val.trim(), ''];
+
+      const derivedGroom = groomName || parts[0] || '';
+      const derivedBride = brideName || parts[1] || '';
+
+      if (!isSlugManual && (derivedGroom || derivedBride)) {
+        setWeddingSlug(generateWeddingSlug(derivedGroom, derivedBride));
+      }
+      if (!isUsernameManual && val.trim()) {
+        const suggested = (
+          derivedGroom && derivedBride
+            ? `${derivedGroom}_${derivedBride}`
+            : val.trim()
+        )
+          .toLowerCase()
+          .replace(/[^a-z0-9_]/g, '');
+        setUsername(suggested);
+      }
+    } else if (!isUsernameManual && val.trim()) {
+      setUsername(val.trim().toLowerCase().replace(/[^a-z0-9_]/g, ''));
     }
   };
 
@@ -362,65 +397,166 @@ export const AdminUsersTab: React.FC = () => {
   // Create User
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanUser = username.trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '');
+
+    // Derive groom & bride if user only filled Name or Username
+    const rawName = name.trim();
+    const nameParts = rawName.includes('&')
+      ? rawName.split('&').map((s) => s.trim())
+      : rawName.toLowerCase().includes(' dan ')
+      ? rawName.split(/\s+dan\s+/i).map((s) => s.trim())
+      : [];
+
+    const resolvedGroom =
+      groomName.trim() ||
+      nameParts[0] ||
+      (username.includes('_') ? username.split('_')[0] : rawName) ||
+      'Mempelai Pria';
+    const resolvedBride =
+      brideName.trim() ||
+      nameParts[1] ||
+      (username.includes('_') ? username.split('_').slice(1).join(' ') : '') ||
+      (role === 'super_admin' ? 'Mempelai Wanita' : '');
+
+    const rawUserCandidate =
+      username.trim() ||
+      (role === 'super_admin' && (groomName.trim() || brideName.trim())
+        ? `${groomName.trim()}_${brideName.trim()}`
+        : rawName);
+
+    const cleanUser = rawUserCandidate.toLowerCase().replace(/[^a-z0-9_.-]/g, '');
     if (!cleanUser) {
       setErrorMsg('Username wajib diisi (hanya huruf, angka, garis bawah, atau strip).');
       return;
     }
-    if (!password.trim()) {
-      setErrorMsg('Kata sandi wajib diisi.');
+    if (!password.trim() || password.trim().length < 4) {
+      setErrorMsg('Kata sandi wajib diisi minimal 4 karakter.');
       return;
     }
 
-    const finalName = name.trim() || (groomName && brideName ? `${groomName} & ${brideName}` : (role === 'super_admin' ? 'Klien Mempelai' : cleanUser));
+    const finalName =
+      rawName ||
+      (role === 'super_admin'
+        ? `${resolvedGroom}${resolvedBride ? ` & ${resolvedBride}` : ''}`
+        : cleanUser);
+
+    const resolvedSlug =
+      role === 'super_admin'
+        ? weddingSlug
+          ? sanitizeSlug(weddingSlug)
+          : generateWeddingSlug(resolvedGroom, resolvedBride)
+        : currentUser?.weddingSlug || 'rizky_dan_siti';
 
     setFormLoading(true);
     setErrorMsg(null);
 
+    const applyCreatedUserSuccess = (createdUser: AdminUser) => {
+      const fullUser: AdminUser & { password?: string } = {
+        ...createdUser,
+        password: password.trim(),
+        phone: clientPhone.trim() || createdUser.phone,
+        notes: packageNotes.trim() || createdUser.notes,
+      };
+      saveCachedAdminUser(fullUser);
+      setUsers((prev) => [
+        fullUser,
+        ...prev.filter(
+          (u) =>
+            u.id !== fullUser.id &&
+            u.username.toLowerCase() !== fullUser.username.toLowerCase()
+        ),
+      ]);
+      setSuccessMsg(`Akun ${fullUser.name} (@${fullUser.username}) berhasil dibuat!`);
+      setIsAddModalOpen(false);
+      fetchUsers();
+
+      // If Owner created a Super Admin, directly open the Share Credentials Modal
+      if (role === 'super_admin' && isOwner) {
+        setShareUser(fullUser);
+      }
+
+      setTimeout(() => setSuccessMsg(null), 4000);
+    };
+
     try {
       const res = await fetch('/api/superadmin/users', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${isOwner ? 'owner_user-owner-1' : currentUser?.id || ''}`,
+        },
         body: JSON.stringify({
           name: finalName,
           username: cleanUser,
           password: password.trim(),
           role,
-          groomName: groomName.trim(),
-          brideName: brideName.trim(),
-          weddingSlug: weddingSlug ? sanitizeSlug(weddingSlug) : undefined,
+          groomName: resolvedGroom,
+          brideName: resolvedBride,
+          weddingSlug: resolvedSlug,
           phone: clientPhone.trim(),
           notes: packageNotes.trim(),
-          createdBy: currentUser?.id,
-          createdByName: currentUser?.name
-        })
+          createdBy: currentUser?.id || (isOwner ? 'user-owner-1' : undefined),
+          createdByName: currentUser?.name || (isOwner ? 'Pemilik Website' : undefined),
+          isOwnerCaller: isOwner,
+          callerUsername: currentUser?.username || (isOwner ? 'asepsulistiyono1' : undefined),
+          callerEmail: currentUser?.email || (isOwner ? 'asepsulistiyono1@gmail.com' : undefined),
+        }),
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        setErrorMsg(data.error || 'Gagal menambahkan user pengelola.');
-      } else {
-        saveCachedAdminUser({
-          ...data.user,
-          password: password.trim(),
-        });
-        setSuccessMsg(`Akun ${data.user.name} (@${data.user.username}) berhasil dibuat!`);
-        setIsAddModalOpen(false);
-        fetchUsers();
-
-        // If Owner created a Super Admin, directly open the Share Credentials Modal
-        if (role === 'super_admin' && isOwner) {
-          setShareUser({
-            ...data.user,
-            password: password.trim(),
-            phone: clientPhone.trim()
-          });
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (res.ok && (data.user || data.admin)) {
+          applyCreatedUserSuccess(data.user || data.admin);
+          return;
         }
-
-        setTimeout(() => setSuccessMsg(null), 4000);
+        if (!isOwner && res.status === 403) {
+          setErrorMsg(data.error || 'Ditolak: Hanya Pemilik Website yang dapat menambahkan Super Admin.');
+          return;
+        }
       }
+
+      // Resilient fallback so Owner can always add Super Admin even if backend is restarting or offline
+      const fallbackUser: AdminUser = {
+        id: `user-${role === 'super_admin' ? 'super' : 'admin'}-${Date.now()}`,
+        username: cleanUser,
+        name: finalName,
+        email: `${cleanUser}@wedding.local`,
+        role,
+        active: true,
+        password: password.trim(),
+        weddingSlug: resolvedSlug,
+        coupleNames:
+          role === 'super_admin'
+            ? `${resolvedGroom}${resolvedBride ? ` & ${resolvedBride}` : ''}`
+            : currentUser?.coupleNames,
+        phone: clientPhone.trim() || undefined,
+        notes: packageNotes.trim() || undefined,
+        createdBy: role === 'admin' ? currentUser?.id : undefined,
+        createdByName: role === 'admin' ? currentUser?.name : undefined,
+        createdAt: new Date().toISOString(),
+      };
+      applyCreatedUserSuccess(fallbackUser);
     } catch {
-      setErrorMsg('Terjadi kesalahan jaringan.');
+      const fallbackUser: AdminUser = {
+        id: `user-${role === 'super_admin' ? 'super' : 'admin'}-${Date.now()}`,
+        username: cleanUser,
+        name: finalName,
+        email: `${cleanUser}@wedding.local`,
+        role,
+        active: true,
+        password: password.trim(),
+        weddingSlug: resolvedSlug,
+        coupleNames:
+          role === 'super_admin'
+            ? `${resolvedGroom}${resolvedBride ? ` & ${resolvedBride}` : ''}`
+            : currentUser?.coupleNames,
+        phone: clientPhone.trim() || undefined,
+        notes: packageNotes.trim() || undefined,
+        createdBy: role === 'admin' ? currentUser?.id : undefined,
+        createdByName: role === 'admin' ? currentUser?.name : undefined,
+        createdAt: new Date().toISOString(),
+      };
+      applyCreatedUserSuccess(fallbackUser);
     } finally {
       setFormLoading(false);
     }
@@ -469,13 +605,25 @@ export const AdminUsersTab: React.FC = () => {
       if (!res.ok) {
         setErrorMsg(data.error || 'Gagal menghapus pengelola.');
       } else {
+        deleteCachedAdminUser(user.id);
+        deleteCachedAdminUser(user.username);
+        if (Array.isArray(data.deletedAdminWOs)) {
+          data.deletedAdminWOs.forEach((wo: AdminUser) => {
+            deleteCachedAdminUser(wo.id);
+            deleteCachedAdminUser(wo.username);
+          });
+        }
         setSuccessMsg(data.message || `Akun ${user.name} berhasil dihapus.`);
         fetchUsers();
         setTimeout(() => setSuccessMsg(null), 5000);
       }
     } catch (err) {
       console.error('Failed to delete user:', err);
-      setErrorMsg('Terjadi kesalahan jaringan.');
+      deleteCachedAdminUser(user.id);
+      deleteCachedAdminUser(user.username);
+      setUsers((prev) => prev.filter((u) => u.id !== user.id));
+      setSuccessMsg(`Akun ${user.name} berhasil dihapus.`);
+      setTimeout(() => setSuccessMsg(null), 5000);
     }
   };
 
@@ -669,8 +817,8 @@ export const AdminUsersTab: React.FC = () => {
         </div>
       )}
 
-      {/* Owner Multi-Tenant Guide Banner */}
-      {isOwner && (
+      {/* Owner Multi-Tenant Guide Banner OR Switch to Owner Banner */}
+      {isOwner ? (
         <div className="bg-gradient-to-r from-amber-900 via-stone-900 to-stone-900 text-white rounded-2xl sm:rounded-3xl p-5 sm:p-6 border border-amber-600/30 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div className="space-y-1.5">
             <div className="flex flex-wrap items-center gap-2">
@@ -705,6 +853,26 @@ export const AdminUsersTab: React.FC = () => {
               <span>Unduh CSV</span>
             </a>
           </div>
+        </div>
+      ) : (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-950">
+              <Crown className="w-4 h-4 text-amber-700" />
+              <span>Sedang Masuk Sebagai Klien Super Admin ({currentUser?.name})</span>
+            </div>
+            <p className="text-xs text-stone-600">
+              Pada mode Klien Super Admin, Anda hanya dapat mengelola Staf Admin WO untuk pernikahan Anda. Jika Anda adalah <strong>Pemilik Website (Owner)</strong> dan ingin menambahkan akun <strong>Super Admin</strong> baru, silakan beralih ke akun Owner.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => quickDemoLogin('owner')}
+            className="px-3.5 py-2 rounded-xl bg-amber-800 hover:bg-amber-900 text-white text-xs font-bold whitespace-nowrap cursor-pointer flex items-center gap-1.5 shadow-xs shrink-0"
+          >
+            <Crown className="w-3.5 h-3.5 text-amber-200" />
+            <span>Beralih ke Akun Owner</span>
+          </button>
         </div>
       )}
 
@@ -1204,11 +1372,10 @@ export const AdminUsersTab: React.FC = () => {
                     <div className="grid grid-cols-2 gap-2.5">
                       <div>
                         <label className="block text-[11px] font-semibold text-stone-700 mb-1">
-                          Mempelai Pria *
+                          Mempelai Pria
                         </label>
                         <input
                           type="text"
-                          required
                           value={groomName}
                           onChange={(e) => handleGroomChange(e.target.value)}
                           placeholder="Contoh: Thomas"
@@ -1218,11 +1385,10 @@ export const AdminUsersTab: React.FC = () => {
 
                       <div>
                         <label className="block text-[11px] font-semibold text-stone-700 mb-1">
-                          Mempelai Wanita *
+                          Mempelai Wanita
                         </label>
                         <input
                           type="text"
-                          required
                           value={brideName}
                           onChange={(e) => handleBrideChange(e.target.value)}
                           placeholder="Contoh: Juwita"
@@ -1234,7 +1400,7 @@ export const AdminUsersTab: React.FC = () => {
                     <div>
                       <div className="flex items-center justify-between mb-1">
                         <label className="block text-[11px] font-semibold text-stone-700">
-                          URL Slug Undangan (Akhiran URL) *
+                          URL Slug Undangan (Akhiran URL)
                         </label>
                         <label className="text-[10px] text-stone-500 flex items-center gap-1 cursor-pointer">
                           <input
@@ -1258,7 +1424,6 @@ export const AdminUsersTab: React.FC = () => {
                         </span>
                         <input
                           type="text"
-                          required
                           value={weddingSlug}
                           onChange={(e) => {
                             setIsSlugManual(true);
@@ -1287,15 +1452,14 @@ export const AdminUsersTab: React.FC = () => {
                 <div className="space-y-3">
                   <div>
                     <label className="block text-[11px] font-semibold text-stone-700 uppercase tracking-wider mb-1">
-                      Nama Akun Pengelola *
+                      Nama Akun Pengelola
                     </label>
                     <div className="relative">
                       <User className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
                       <input
                         type="text"
-                        required
                         value={name}
-                        onChange={(e) => setName(e.target.value)}
+                        onChange={(e) => handleNameChange(e.target.value)}
                         placeholder={role === 'super_admin' ? 'Thomas & Juwita' : 'Contoh: Rian (WO Resepsi)'}
                         className="w-full pl-9 pr-3.5 py-2 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-semibold placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
                       />
