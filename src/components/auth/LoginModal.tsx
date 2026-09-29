@@ -26,7 +26,7 @@ interface LoginModalProps {
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSuccess }) => {
-  const { login, loginWithGoogle } = useAuth();
+  const { login } = useAuth();
   
   // Login form states
   const [username, setUsername] = useState('');
@@ -61,19 +61,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
       onClose();
     } else {
       setErrorMsg(res.error || 'Login gagal.');
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
-    setLoading(true);
-    setErrorMsg(null);
-    const res = await loginWithGoogle();
-    setLoading(false);
-    if (res.success) {
-      onSuccess();
-      onClose();
-    } else {
-      setErrorMsg(res.error || 'Login dengan Google gagal.');
     }
   };
 
@@ -295,16 +282,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
                 >
                   <span>{loading ? 'Memverifikasi...' : 'Masuk ke Dashboard'}</span>
                   <ArrowRight className="w-4 h-4" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleGoogleSignIn}
-                  disabled={loading}
-                  className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-white hover:bg-stone-50 border border-stone-200 text-stone-800 font-semibold text-xs sm:text-sm shadow-xs transition-all cursor-pointer disabled:opacity-50"
-                >
-                  <Mail className="w-4 h-4 text-amber-700" />
-                  <span>Masuk dengan Akun Google</span>
                 </button>
               </form>
             </>
