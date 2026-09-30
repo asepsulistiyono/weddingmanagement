@@ -16,12 +16,16 @@ export interface LoginModalProps {
   isOpen: boolean
   onClose: () => void
   onSuccess: () => void
+
+  // Ubah nilainya setiap kali logout berhasil.
+  resetKey?: number
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({
   isOpen,
   onClose,
   onSuccess,
+  resetKey = 0,
 }) => {
   const { login } = useAuth()
 
@@ -40,9 +44,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   }, [])
 
   useEffect(() => {
-    // Kosongkan form saat modal dibuka maupun ditutup.
     resetForm()
-  }, [isOpen, resetForm])
+  }, [isOpen, resetKey, resetForm])
 
   const handleClose = () => {
     resetForm()
@@ -162,7 +165,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                     name="email"
                     type="email"
                     required
-                    autoComplete="username"
+                    autoComplete="off"
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
@@ -193,7 +196,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                     name="password"
                     type={showPassword ? 'text' : 'password'}
                     required
-                    autoComplete="current-password"
+                    autoComplete="new-password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     placeholder="Masukkan kata sandi"
