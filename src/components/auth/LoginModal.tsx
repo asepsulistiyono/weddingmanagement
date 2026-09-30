@@ -16,8 +16,6 @@ export interface LoginModalProps {
   isOpen: boolean
   onClose: () => void
   onSuccess: () => void
-
-  // Ubah nilainya setiap kali logout berhasil.
   resetKey?: number
 }
 
@@ -29,14 +27,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 }) => {
   const { login } = useAuth()
 
-  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const resetForm = useCallback(() => {
-    setEmail('')
+    setUsername('')
     setPassword('')
     setShowPassword(false)
     setLoading(false)
@@ -61,12 +59,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     setErrorMsg(null)
 
     try {
-      const result = await login(email.trim().toLowerCase(), password)
+      const normalizedUsername = username
+        .trim()
+        .replace(/^@+/, '')
+        .toLowerCase()
+
+      const result = await login(normalizedUsername, password)
 
       if (!result.success) {
         setErrorMsg(
           result.error ||
-            'Login gagal. Periksa email dan kata sandi Anda.',
+            'Login gagal. Periksa username dan kata sandi Anda.',
         )
         return
       }
@@ -131,7 +134,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               </h2>
 
               <p className="mt-1 text-xs text-stone-500 sm:text-sm">
-                Masukkan email dan kata sandi akun pengelola Anda.
+                Masukkan username dan kata sandi akun pengelola Anda.
               </p>
             </div>
 
@@ -148,10 +151,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label
-                  htmlFor="manager-email"
+                  htmlFor="manager-username"
                   className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-stone-700"
                 >
-                  Email
+                  Username
                 </label>
 
                 <div className="relative">
@@ -161,17 +164,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   />
 
                   <input
-                    id="manager-email"
-                    name="email"
-                    type="email"
+                    id="manager-username"
+                    name="username"
+                    type="text"
                     required
-                    autoComplete="off"
+                    autoComplete="username"
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                    placeholder="nama@email.com"
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
+                    placeholder="Masukkan username"
                     className="w-full rounded-xl border border-stone-200 bg-stone-50 py-2.5 pl-10 pr-3.5 text-sm text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                   />
                 </div>
@@ -196,7 +199,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                     name="password"
                     type={showPassword ? 'text' : 'password'}
                     required
-                    autoComplete="new-password"
+                    autoComplete="current-password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     placeholder="Masukkan kata sandi"
@@ -231,6 +234,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 <span>
                   {loading ? 'Memverifikasi…' : 'Masuk ke Dashboard'}
                 </span>
+
                 {!loading && <ArrowRight className="h-4 w-4" />}
               </button>
             </form>
