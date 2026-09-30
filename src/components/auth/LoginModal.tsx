@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import React, { useEffect, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import {
   ArrowRight,
   Eye,
@@ -9,13 +9,13 @@ import {
   ShieldCheck,
   User,
   X,
-} from 'lucide-react';
-import { useAuth } from '../../context/AuthContext.tsx';
+} from 'lucide-react'
+import { useAuth } from '../../context/AuthContext.tsx'
 
-interface LoginModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onSuccess: () => void;
+export interface LoginModalProps {
+  isOpen: boolean
+  onClose: () => void
+  onSuccess: () => void
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({
@@ -23,55 +23,63 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { login } = useAuth();
+  const { login } = useAuth()
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const resetForm = () => {
-    setEmail('');
-    setPassword('');
-    setShowPassword(false);
-    setLoading(false);
-    setErrorMsg(null);
-  };
+    setEmail('')
+    setPassword('')
+    setShowPassword(false)
+    setLoading(false)
+    setErrorMsg(null)
+  }
 
   useEffect(() => {
-    resetForm();
-  }, [isOpen]);
+    if (isOpen) {
+      resetForm()
+    }
+    // Reset hanya saat modal dibuka.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen])
 
   const handleClose = () => {
-    resetForm();
-    onClose();
-  };
+    resetForm()
+    onClose()
+  }
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (loading) return;
+    event.preventDefault()
 
-    setLoading(true);
-    setErrorMsg(null);
+    if (loading) return
+
+    setLoading(true)
+    setErrorMsg(null)
 
     try {
-      const result = await login(email.trim().toLowerCase(), password);
+      const result = await login(email.trim().toLowerCase(), password)
 
       if (!result.success) {
-        setErrorMsg(result.error || 'Login gagal. Periksa email dan kata sandi Anda.');
-        return;
+        setErrorMsg(
+          result.error ||
+            'Login gagal. Periksa email dan kata sandi Anda.',
+        )
+        return
       }
 
-      resetForm();
-      onSuccess();
-      onClose();
+      resetForm()
+      onSuccess()
+      onClose()
     } catch {
-      setErrorMsg('Terjadi kesalahan saat login. Silakan coba lagi.');
+      setErrorMsg('Terjadi kesalahan saat login. Silakan coba lagi.')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   return (
     <AnimatePresence>
@@ -82,7 +90,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) handleClose();
+            if (event.target === event.currentTarget) {
+              handleClose()
+            }
           }}
         >
           <motion.div
@@ -194,7 +204,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowPassword((visible) => !visible)}
-                    aria-label={showPassword ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
+                    aria-label={
+                      showPassword
+                        ? 'Sembunyikan kata sandi'
+                        : 'Tampilkan kata sandi'
+                    }
                     aria-pressed={showPassword}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-500 transition hover:text-amber-700"
                   >
@@ -212,7 +226,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 disabled={loading}
                 className="mt-1 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-stone-900 px-4 py-3 text-sm font-semibold tracking-wide text-white shadow-md transition hover:bg-stone-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <span>{loading ? 'Memverifikasi…' : 'Masuk ke Dashboard'}</span>
+                <span>
+                  {loading ? 'Memverifikasi…' : 'Masuk ke Dashboard'}
+                </span>
                 {!loading && <ArrowRight className="h-4 w-4" />}
               </button>
             </form>
@@ -220,5 +236,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         </motion.div>
       )}
     </AnimatePresence>
-  );
-};
+  )
+}
+
+export default LoginModal
