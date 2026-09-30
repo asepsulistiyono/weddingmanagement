@@ -39,39 +39,38 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     setErrorMsg(null);
   };
 
-  useEffect(() => {
-    resetForm();
-  }, [isOpen]);
+useEffect(() => {
+  const {
+    data: { subscription },
+  } = supabase.auth.onAuthStateChange((event, session) => {
+    setUser(session?.user ?? null);
 
-  const handleClose = () => {
-    resetForm();
-    onClose();
-  };
-
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (loading) return;
-
-    setLoading(true);
-    setErrorMsg(null);
-
-    try {
-      const result = await login(email.trim().toLowerCase(), password);
-
-      if (!result.success) {
-        setErrorMsg(result.error || 'Login gagal. Periksa email dan kata sandi Anda.');
-        return;
-      }
-
-      resetForm();
-      onSuccess();
-      onClose();
-    } catch {
-      setErrorMsg('Terjadi kesalahan saat login. Silakan coba lagi.');
-    } finally {
-      setLoading(false);
+    if (event === 'SIGNED_OUT') {
+      setUsername('');
+      setEmail('');
+      setPassword('');
+      setProfile(null);
     }
-  };
+  });
+
+  return () => subscription.unsubscribe();
+}, []);
+
+async function handleLogout() {
+  const { error } = await supabase.auth.signOut({ scope: 'local' });
+
+  if (error) {
+    console.error('Logout gagal:', error.message);
+    return;
+  }
+
+  // Bersihkan tampilan login setelah logout berhasil
+  setUser(null);
+  setProfile(null);
+  setUsername('');
+  setEmail('');
+  setPassword('');
+}
 
   return (
     <AnimatePresence>
