@@ -2237,12 +2237,14 @@ app.get('/api/admin/database-status', async (req, res) => {
       connected: true,
       provider: connInfo.provider,
       isExternalSupabase: connInfo.isExternalSupabase,
+      supabaseUrl: connInfo.supabaseUrl || '',
       dialect: 'postgresql',
       host: connInfo.host,
       database: connInfo.database,
       tables: ['wedding_settings', 'guests', 'wishes', 'gallery_photos', 'users'],
       tableCounts: counts,
       guestsCount: counts.guests,
+      schemaSql: dbRepo.SUPABASE_SCHEMA_SQL,
       syncedAt: new Date().toISOString()
     });
   } catch (err: any) {
@@ -2250,17 +2252,19 @@ app.get('/api/admin/database-status', async (req, res) => {
       connected: false,
       provider: connInfo.provider,
       isExternalSupabase: connInfo.isExternalSupabase,
+      supabaseUrl: connInfo.supabaseUrl || '',
       dialect: 'postgresql',
       host: connInfo.host,
       database: connInfo.database,
       tables: ['wedding_settings', 'guests', 'wishes', 'gallery_photos', 'users'],
+      schemaSql: dbRepo.SUPABASE_SCHEMA_SQL,
       error: err?.message || 'Database not connected',
       syncedAt: new Date().toISOString()
     });
   }
 });
 
-// Force synchronize all current application data to PostgreSQL / Supabase
+// Force synchronize all current application data to PostgreSQL / External Supabase
 app.post('/api/admin/database-sync', async (req, res) => {
   try {
     await dbRepo.saveSettings(weddingSettings, 'main');
@@ -2300,14 +2304,17 @@ app.post('/api/admin/database-sync', async (req, res) => {
     const connInfo = getActiveConnectionInfo();
     res.json({
       success: true,
-      message: 'Seluruh data undangan, buku tamu, ucapan, galeri, dan akun Super Admin berhasil disinkronkan ke database PostgreSQL!',
+      message: connInfo.isExternalSupabase
+        ? `Seluruh data undangan, buku tamu, ucapan, galeri, dan akun pengelola berhasil disinkronkan langsung ke proyek Supabase Eksternal (${connInfo.host})!`
+        : 'Seluruh data berhasil disinkronkan! Tambahkan VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY di Secrets untuk menyinkronkan ke proyek Supabase eksternal Anda.',
       tableCounts: counts,
       provider: connInfo.provider,
+      isExternalSupabase: connInfo.isExternalSupabase,
       syncedAt: new Date().toISOString()
     });
   } catch (err: any) {
     res.status(500).json({
-      error: err?.message || 'Gagal melakukan sinkronisasi ke database PostgreSQL.'
+      error: err?.message || 'Gagal melakukan sinkronisasi ke database Supabase.'
     });
   }
 });
