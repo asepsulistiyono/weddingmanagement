@@ -42,13 +42,15 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   }, [])
 
   useEffect(() => {
-    resetForm()
-  }, [isOpen, resetKey, resetForm])
-
-  const handleClose = () => {
-    resetForm()
-    onClose()
+  if (isOpen) {
+    setErrorMsg(null)
+    setShowPassword(false)
   }
+}, [isOpen, resetKey])
+
+const handleClose = () => {
+  onClose()
+}
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
