@@ -1,3 +1,4 @@
+import React, { useCallback, useEffect, useState } from 'react'
 import { LoginModal } from './LoginModal'
 import React, { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
@@ -32,13 +33,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-  const resetForm = () => {
-    setEmail('')
-    setPassword('')
-    setShowPassword(false)
-    setLoading(false)
-    setErrorMsg(null)
-  }
+  const resetForm = useCallback(() => {
+  setEmail('')
+  setPassword('')
+  setShowPassword(false)
+  setLoading(false)
+  setErrorMsg(null)
+}, [])
+
+useEffect(() => {
+  // Bersihkan kolom setiap kali modal dibuka atau ditutup.
+  resetForm()
+}, [isOpen, resetForm])
 
   useEffect(() => {
     if (isOpen) {
