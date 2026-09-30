@@ -151,7 +151,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={handleSubmit} autoComplete="off" className="space-y-4">
               <div>
                 <label
                   htmlFor="manager-username"
@@ -167,21 +167,19 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   />
 
                   <input
-                    id="manager-username"
-                    name="username"
-                    type="text"
-                    required
-                    autoComplete="username"
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    value={username}
-                    onChange={(event) => setUsername(event.target.value)}
-                    placeholder="Masukkan username"
-                    className="w-full rounded-xl border border-stone-200 bg-stone-50 py-2.5 pl-10 pr-3.5 text-sm text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
-                  />
-                </div>
-              </div>
+  id="manager-username"
+  name="login-user"
+  type="text"
+  required
+  autoComplete="off"
+  autoCapitalize="none"
+  autoCorrect="off"
+  spellCheck={false}
+  value={username}
+  onChange={(event) => setUsername(event.target.value)}
+  placeholder="Masukkan username"
+  // className tetap seperti semula
+/>
 
               <div>
                 <label
