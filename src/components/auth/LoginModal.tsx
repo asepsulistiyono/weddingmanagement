@@ -43,13 +43,15 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   // Kosongkan form saat modal dibuka/ditutup atau resetKey berubah.
   useEffect(() => {
+  if (isOpen) {
     resetForm()
-  }, [isOpen, resetKey, resetForm])
+  }
+}, [isOpen, resetKey, resetForm])
 
   const handleClose = () => {
-    resetForm()
-    onClose()
-  }
+  resetForm()
+  onClose()
+}
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
