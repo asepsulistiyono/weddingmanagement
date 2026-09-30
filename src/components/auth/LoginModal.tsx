@@ -41,16 +41,22 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     setErrorMsg(null)
   }, [])
 
+  // Mengosongkan formulir saat resetKey berubah, misalnya setelah logout.
   useEffect(() => {
-  if (isOpen) {
-    setErrorMsg(null)
-    setShowPassword(false)
-  }
-}, [isOpen, resetKey])
+    resetForm()
+  }, [resetKey, resetForm])
 
-const handleClose = () => {
-  onClose()
-}
+  useEffect(() => {
+    if (isOpen) {
+      setErrorMsg(null)
+      setShowPassword(false)
+    }
+  }, [isOpen])
+
+  const handleClose = () => {
+    resetForm()
+    onClose()
+  }
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
