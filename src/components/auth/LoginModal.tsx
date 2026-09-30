@@ -3,21 +3,15 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, 
   ShieldCheck, 
-  Crown, 
   Lock, 
   User, 
   ArrowRight, 
-  Sparkles,
-  UserCheck,
-  KeyRound,
-  RotateCcw,
   CheckCircle2,
-  Mail,
   ShieldAlert,
   Eye,
   EyeOff
 } from 'lucide-react';
-import { useAuth, getCachedAdminsList, saveCachedAdminUser } from '../../context/AuthContext.tsx';
+import { useAuth } from '../../context/AuthContext.tsx';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -36,22 +30,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Forgot password mode
-  const [isForgotMode, setIsForgotMode] = useState(false);
-  const [resetUsername, setResetUsername] = useState('');
-  const [verificationInput, setVerificationInput] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [showNewPassword, setShowNewPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [resetLoading, setResetLoading] = useState(false);
-
   if (!isOpen) return null;
 
   const handleManualLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErrorMsg(null);
+    setSuccessMsg(null);
 
     const res = await login(username, password);
     setLoading(false);
@@ -61,100 +46,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
       onClose();
     } else {
       setErrorMsg(res.error || 'Login gagal.');
-    }
-  };
-
-  const handleResetPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg(null);
-    setSuccessMsg(null);
-
-    if (!resetUsername.trim()) {
-      setErrorMsg('Username akun wajib diisi.');
-      return;
-    }
-    if (!verificationInput.trim()) {
-      setErrorMsg('Email terdaftar atau PIN Keamanan wajib diisi.');
-      return;
-    }
-    if (newPassword.length < 4) {
-      setErrorMsg('Kata sandi baru minimal 4 karakter.');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setErrorMsg('Konfirmasi kata sandi baru tidak cocok.');
-      return;
-    }
-
-    setResetLoading(true);
-
-    try {
-      const res = await fetch('/api/auth/reset-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: resetUsername.trim().toLowerCase(),
-          verificationEmail: verificationInput.trim().toLowerCase(),
-          securityPin: verificationInput.trim(),
-          newPassword: newPassword.trim()
-        })
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setErrorMsg(data.error || 'Gagal mereset kata sandi.');
-      } else {
-        const cleanUser = (data.username || resetUsername).trim().toLowerCase();
-        const existing = getCachedAdminsList().find(
-          (u) => u.username.toLowerCase() === cleanUser
-        );
-        if (existing) {
-          saveCachedAdminUser({ ...existing, password: newPassword.trim() });
-        }
-        setSuccessMsg(data.message || 'Kata sandi berhasil direset!');
-        // Pre-fill login credentials
-        setUsername(data.username || resetUsername);
-        setPassword(newPassword);
-        // Reset states
-        setNewPassword('');
-        setConfirmPassword('');
-        setVerificationInput('');
-        // Switch back to login view after short delay or immediately
-        setTimeout(() => {
-          setIsForgotMode(false);
-        }, 1200);
-      }
-    } catch {
-      const cleanId = resetUsername.trim().toLowerCase();
-      const cleanPin = verificationInput.trim().toLowerCase();
-      const target = getCachedAdminsList().find(
-        (u) =>
-          u.username.toLowerCase() === cleanId ||
-          (u.email && u.email.toLowerCase() === cleanId)
-      );
-      if (
-        target &&
-        (cleanPin === '9988' ||
-          cleanPin === '123456' ||
-          (target.weddingSlug && target.weddingSlug.toLowerCase() === cleanPin) ||
-          (target.email && target.email.toLowerCase() === cleanPin))
-      ) {
-        saveCachedAdminUser({ ...target, password: newPassword.trim() });
-        setSuccessMsg(`Kata sandi untuk @${target.username} berhasil direset!`);
-        setUsername(target.username);
-        setPassword(newPassword.trim());
-        setNewPassword('');
-        setConfirmPassword('');
-        setVerificationInput('');
-        setTimeout(() => {
-          setIsForgotMode(false);
-        }, 1000);
-      } else {
-        setErrorMsg('Verifikasi tidak sesuai. Pastikan Username dan PIN (9988) atau Slug Undangan benar.');
-      }
-    } finally {
-      setResetLoading(false);
     }
   };
 
@@ -174,273 +65,101 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
             <X className="w-5 h-5" />
           </button>
 
-          {!isForgotMode ? (
-            /* --- NORMAL LOGIN VIEW --- */
-            <>
-              {/* Header */}
-              <div className="text-center mb-4 pt-1">
-                <div 
-                  className="w-10 h-10 bg-amber-100 text-amber-900 rounded-xl flex items-center justify-center mx-auto mb-2 select-none"
-                  title="Panel Admin"
-                >
-                  <ShieldCheck className="w-5 h-5 text-amber-700" />
-                </div>
-                <h3 className="font-serif-wedding text-xl sm:text-2xl font-bold text-stone-800">
-                  Panel Masuk Pengelola
-                </h3>
-                <p className="text-[11px] sm:text-xs text-stone-500 mt-0.5">
-                  Masukkan <strong>Username</strong> dan <strong>Kata Sandi</strong> resmi untuk mengakses Dashboard.
-                </p>
-              </div>
+          {/* Header */}
+          <div className="text-center mb-4 pt-1">
+            <div 
+              className="w-10 h-10 bg-amber-100 text-amber-900 rounded-xl flex items-center justify-center mx-auto mb-2 select-none"
+              title="Panel Admin"
+            >
+              <ShieldCheck className="w-5 h-5 text-amber-700" />
+            </div>
+            <h3 className="font-serif-wedding text-xl sm:text-2xl font-bold text-stone-800">
+              Panel Masuk Pengelola
+            </h3>
+            <p className="text-[11px] sm:text-xs text-stone-500 mt-0.5">
+              Masukkan <strong>Username</strong> dan <strong>Kata Sandi</strong> resmi untuk mengakses Dashboard.
+            </p>
+          </div>
 
-              {errorMsg && (
-                <div className="p-2.5 mb-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 shrink-0" />
-                  <span>{errorMsg}</span>
-                </div>
-              )}
-
-              {successMsg && (
-                <div className="p-2.5 mb-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-                  <span>{successMsg}</span>
-                </div>
-              )}
-
-              {/* Form */}
-              <form onSubmit={handleManualLogin} className="space-y-3">
-                <div>
-                  <label className="block text-[11px] font-semibold text-stone-700 uppercase tracking-wider mb-1">
-                    Username atau Email Akun
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
-                      <User className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value.toLowerCase().trim())}
-                      placeholder="Username atau email (cth: superadmin)"
-                      className="w-full pl-9 pr-3.5 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 text-stone-800 font-mono"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-[11px] font-semibold text-stone-700 uppercase tracking-wider">
-                      Kata Sandi
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsForgotMode(true);
-                        setErrorMsg(null);
-                        setSuccessMsg(null);
-                        if (username) setResetUsername(username);
-                      }}
-                      className="text-[11px] text-amber-700 hover:text-amber-800 font-medium hover:underline cursor-pointer"
-                    >
-                      Lupa kata sandi?
-                    </button>
-                  </div>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
-                      <Lock className="w-4 h-4" />
-                    </div>
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Masukkan kata sandi"
-                      className="w-full pl-9 pr-10 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 text-stone-900 font-medium"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword((prev) => !prev)}
-                      title={showPassword ? 'Sembunyikan kata sandi' : 'Lihat kata sandi'}
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-stone-500 hover:text-amber-700 cursor-pointer transition-colors"
-                    >
-                      {showPassword ? (
-                        <EyeOff className="w-4 h-4" />
-                      ) : (
-                        <Eye className="w-4 h-4" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-stone-900 hover:bg-stone-800 active:scale-[0.99] text-stone-100 font-semibold text-xs sm:text-sm tracking-wide shadow-md transition-all cursor-pointer disabled:opacity-50 mt-1"
-                >
-                  <span>{loading ? 'Memverifikasi...' : 'Masuk ke Dashboard'}</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-              </form>
-            </>
-          ) : (
-            /* --- RESET PASSWORD VIEW --- */
-            <div className="pt-1">
-              {/* Header */}
-              <div className="text-center mb-3.5">
-                <div className="w-10 h-10 bg-amber-50 text-amber-800 rounded-xl flex items-center justify-center mx-auto mb-2 border border-amber-200">
-                  <KeyRound className="w-5 h-5 text-amber-700" />
-                </div>
-                <h3 className="font-serif-wedding text-xl font-bold text-stone-900">
-                  Reset Kata Sandi
-                </h3>
-                <p className="text-[11px] text-stone-500 mt-0.5">
-                  Pemulihan kata sandi darurat untuk Tim Pengelola.
-                </p>
-              </div>
-
-              {/* Info Box untuk Pemulihan */}
-              <div className="p-2.5 mb-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-[11px] text-amber-900 space-y-1">
-                <div className="flex items-center gap-1.5 font-semibold text-amber-800">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Petunjuk Pemulihan Akun:</span>
-                </div>
-                <p className="text-stone-600 leading-relaxed text-[10.5px]">
-                  • <strong>Pemulihan Akun</strong>: Masukkan username akun Anda, lalu verifikasi menggunakan <strong>PIN Otorisasi Keamanan (9988)</strong>, <strong>Slug URL Undangan</strong> (contoh: <span className="font-mono text-stone-700">rizky_dan_siti</span>), atau <strong>Email terdaftar</strong>.<br />
-                  • Pemilik website juga dapat mereset kata sandi pengelola kapan saja dari menu Manajemen Pengelola di Dashboard.
-                </p>
-              </div>
-
-              {errorMsg && (
-                <div className="p-2.5 mb-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 shrink-0" />
-                  <span>{errorMsg}</span>
-                </div>
-              )}
-
-              {successMsg && (
-                <div className="p-2.5 mb-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-                  <span>{successMsg}</span>
-                </div>
-              )}
-
-              <form onSubmit={handleResetPassword} className="space-y-3">
-                <div>
-                  <label className="block text-[11px] font-semibold text-stone-700 uppercase tracking-wider mb-1">
-                    Username Akun
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
-                      <User className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      value={resetUsername}
-                      onChange={(e) => setResetUsername(e.target.value.toLowerCase().trim())}
-                      placeholder="contoh: superadmin atau nama_pengguna"
-                      className="w-full pl-9 pr-3.5 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm font-mono focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 text-stone-800"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-stone-700 uppercase tracking-wider mb-1">
-                    Verifikasi (PIN 9988 / Slug Undangan / Email)
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
-                      <Mail className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      value={verificationInput}
-                      onChange={(e) => setVerificationInput(e.target.value)}
-                      placeholder="Ketik 9988, slug undangan, atau email"
-                      className="w-full pl-9 pr-3.5 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 text-stone-800"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 sm:gap-3">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-stone-700 uppercase tracking-wider mb-1">
-                      Kata Sandi Baru
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showNewPassword ? 'text' : 'password'}
-                        required
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        placeholder="Min 4 karakter"
-                        className="w-full pl-3 pr-9 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 text-stone-900 font-medium"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowNewPassword((prev) => !prev)}
-                        title={showNewPassword ? 'Sembunyikan kata sandi' : 'Lihat kata sandi'}
-                        className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-stone-500 hover:text-amber-700 cursor-pointer"
-                      >
-                        {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-semibold text-stone-700 uppercase tracking-wider mb-1">
-                      Ulangi Sandi
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showConfirmPassword ? 'text' : 'password'}
-                        required
-                        value={confirmPassword}
-                        onChange={(e) => setConfirmPassword(e.target.value)}
-                        placeholder="Ulangi sandi"
-                        className="w-full pl-3 pr-9 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 text-stone-900 font-medium"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowConfirmPassword((prev) => !prev)}
-                        title={showConfirmPassword ? 'Sembunyikan kata sandi' : 'Lihat kata sandi'}
-                        className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-stone-500 hover:text-amber-700 cursor-pointer"
-                      >
-                        {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="pt-1.5 space-y-2">
-                  <button
-                    type="submit"
-                    disabled={resetLoading}
-                    className="w-full inline-flex items-center justify-center gap-2 py-2 px-4 rounded-xl bg-amber-700 hover:bg-amber-800 text-white font-semibold text-xs sm:text-sm shadow-md transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    <RotateCcw className={`w-4 h-4 ${resetLoading ? 'animate-spin' : ''}`} />
-                    <span>{resetLoading ? 'Menyimpan...' : 'Simpan & Reset Kata Sandi'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsForgotMode(false);
-                      setErrorMsg(null);
-                      setSuccessMsg(null);
-                    }}
-                    className="w-full text-center py-1.5 text-xs font-medium text-stone-500 hover:text-stone-800 transition-colors cursor-pointer"
-                  >
-                    ← Kembali ke Halaman Masuk
-                  </button>
-                </div>
-              </form>
+          {errorMsg && (
+            <div className="p-2.5 mb-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 shrink-0" />
+              <span>{errorMsg}</span>
             </div>
           )}
+
+          {successMsg && (
+            <div className="p-2.5 mb-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+              <span>{successMsg}</span>
+            </div>
+          )}
+
+          {/* Form */}
+          <form onSubmit={handleManualLogin} className="space-y-3">
+            <div>
+              <label className="block text-[11px] font-semibold text-stone-700 uppercase tracking-wider mb-1">
+                Username atau Email Akun
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
+                  <User className="w-4 h-4" />
+                </div>
+                <input
+                  type="text"
+                  required
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value.toLowerCase().trim())}
+                  placeholder="Username atau email (cth: superadmin)"
+                  className="w-full pl-9 pr-3.5 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 text-stone-800 font-mono"
+                />
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[11px] font-semibold text-stone-700 uppercase tracking-wider">
+                  Kata Sandi
+                </label>
+              </div>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
+                  <Lock className="w-4 h-4" />
+                </div>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Masukkan kata sandi"
+                  className="w-full pl-9 pr-10 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 text-stone-900 font-medium"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  title={showPassword ? 'Sembunyikan kata sandi' : 'Lihat kata sandi'}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-stone-500 hover:text-amber-700 cursor-pointer transition-colors"
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-stone-900 hover:bg-stone-800 active:scale-[0.99] text-stone-100 font-semibold text-xs sm:text-sm tracking-wide shadow-md transition-all cursor-pointer disabled:opacity-50 mt-1"
+            >
+              <span>{loading ? 'Memverifikasi...' : 'Masuk ke Dashboard'}</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </form>
         </motion.div>
       </div>
     </AnimatePresence>
