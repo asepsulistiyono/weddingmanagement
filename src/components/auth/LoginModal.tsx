@@ -2,13 +2,13 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 
-type LoginModalProps = {
+export type LoginModalProps = {
   supabase: SupabaseClient
   isOpen?: boolean
   onClose?: () => void
 }
 
-export default function LoginModal({
+export function LoginModal({
   supabase,
   isOpen = true,
   onClose = () => {},
@@ -234,3 +234,5 @@ export default function LoginModal({
     </div>
   )
 }
+
+export default LoginModal
