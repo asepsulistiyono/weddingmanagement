@@ -1,3 +1,4 @@
+import { LoginModal } from './LoginModal'
 import React, { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import {
