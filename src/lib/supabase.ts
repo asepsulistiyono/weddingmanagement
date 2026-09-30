@@ -1,2 +1,9 @@
-export { supabase, supabaseUrl, isSupabaseConfigured, default } from '../../supabase.ts';
-
+export {
+  supabase,
+  supabaseUrl,
+  isSupabaseConfigured,
+  isSupabaseReady,
+  markSupabaseKeyInvalid,
+  getSupabaseKeyError,
+  default,
+} from '../../supabase.ts';

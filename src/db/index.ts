@@ -1,7 +1,7 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './schema.ts';
-import { isSupabaseConfigured, supabaseUrl } from '../../supabase.ts';
+import { isSupabaseReady, supabaseUrl, getSupabaseKeyError } from '../../supabase.ts';
 
 // Add global connection pool caching to persist across hot-reloads
 declare global {
@@ -29,7 +29,8 @@ export const createPool = () => {
 };
 
 export const getActiveConnectionInfo = () => {
-  if (isSupabaseConfigured && supabaseUrl) {
+  const keyErr = getSupabaseKeyError();
+  if (isSupabaseReady() && supabaseUrl) {
     let parsedHost = supabaseUrl;
     try {
       parsedHost = new URL(supabaseUrl).host;
@@ -39,6 +40,7 @@ export const getActiveConnectionInfo = () => {
     return {
       isExternalSupabase: true,
       supabaseUrl,
+      keyError: null,
       host: parsedHost,
       database: 'postgres (Supabase External)',
       provider: `Supabase Cloud PostgreSQL (${parsedHost})`,
@@ -46,10 +48,13 @@ export const getActiveConnectionInfo = () => {
   }
   return {
     isExternalSupabase: false,
-    supabaseUrl: '',
+    supabaseUrl: supabaseUrl || '',
+    keyError: keyErr,
     host: process.env.SQL_HOST || '127.0.0.1',
     database: process.env.SQL_DB_NAME || 'ai_studio_db',
-    provider: 'PostgreSQL 16 (Menunggu Konfigurasi Supabase Eksternal)',
+    provider: keyErr
+      ? 'PostgreSQL 16 (API Key Supabase Tidak Valid — Mode Cadangan Aktif)'
+      : 'PostgreSQL 16 (Mode Cadangan Aktif)',
   };
 };
 

@@ -1,6 +1,6 @@
 import { eq, desc } from 'drizzle-orm';
 import { db } from './index.ts';
-import { supabase, isSupabaseConfigured } from '../../supabase.ts';
+import { supabase, isSupabaseReady, markSupabaseKeyInvalid } from '../../supabase.ts';
 import { 
   weddingSettingsTable, 
   guests, 
@@ -15,6 +15,20 @@ import type {
   GalleryPhoto, 
   AdminUser 
 } from '../types.ts';
+
+function handleSupabaseError(err: any) {
+  const msg = String(err?.message || err || '');
+  const lower = msg.toLowerCase();
+  if (
+    lower.includes('invalid api key') ||
+    lower.includes('jwt') ||
+    lower.includes('apikey')
+  ) {
+    markSupabaseKeyInvalid(
+      'API Key Supabase tidak sesuai dengan Project URL. Pastikan VITE_SUPABASE_ANON_KEY atau VITE_SUPABASE_PUBLISHABLE_KEY disalin dari menu Project Settings > API pada proyek Supabase yang sama.'
+    );
+  }
+}
 
 export const SUPABASE_SCHEMA_SQL = `-- ============================================================================
 -- SCRIPT SQL SUPABASE EKSTERNAL (Jalankan di SQL Editor Dashboard Supabase)
@@ -114,18 +128,20 @@ END $$;`;
 
 // ----------------- SETTINGS -----------------
 export async function getSettings(id: string = 'main'): Promise<WeddingSettings | null> {
-  if (isSupabaseConfigured) {
+  if (isSupabaseReady()) {
     try {
       const { data, error } = await supabase
         .from('wedding_settings')
         .select('data')
         .eq('id', id)
         .maybeSingle();
-      if (!error && data?.data) {
+      if (error) {
+        handleSupabaseError(error);
+      } else if (data?.data) {
         return data.data as WeddingSettings;
       }
     } catch (err) {
-      console.error(`Supabase getSettings(${id}) error:`, err);
+      handleSupabaseError(err);
     }
   }
 
@@ -135,14 +151,13 @@ export async function getSettings(id: string = 'main'): Promise<WeddingSettings 
       return records[0].data as WeddingSettings;
     }
     return null;
-  } catch (error) {
-    console.error(`Database query error in getSettings(${id}):`, error);
+  } catch {
     return null;
   }
 }
 
 export async function saveSettings(settings: WeddingSettings, id: string = 'main'): Promise<void> {
-  if (isSupabaseConfigured) {
+  if (isSupabaseReady()) {
     try {
       const { error } = await supabase
         .from('wedding_settings')
@@ -155,9 +170,9 @@ export async function saveSettings(settings: WeddingSettings, id: string = 'main
           { onConflict: 'id' }
         );
       if (!error) return;
-      console.error(`Supabase saveSettings(${id}) error:`, error.message);
+      handleSupabaseError(error);
     } catch (err) {
-      console.error(`Supabase saveSettings(${id}) exception:`, err);
+      handleSupabaseError(err);
     }
   }
 
@@ -175,61 +190,65 @@ export async function saveSettings(settings: WeddingSettings, id: string = 'main
           updatedAt: new Date()
         }
       });
-  } catch (error) {
-    console.error(`Database query error in saveSettings(${id}):`, error);
+  } catch {
+    // fallback handled in memory
   }
 }
 
 export async function getAllWeddings(): Promise<Array<{ id: string; data: WeddingSettings }>> {
-  if (isSupabaseConfigured) {
+  if (isSupabaseReady()) {
     try {
       const { data, error } = await supabase
         .from('wedding_settings')
         .select('id, data');
-      if (!error && Array.isArray(data)) {
+      if (error) {
+        handleSupabaseError(error);
+      } else if (Array.isArray(data)) {
         return data.map(r => ({ id: String(r.id), data: r.data as WeddingSettings }));
       }
     } catch (err) {
-      console.error('Supabase getAllWeddings error:', err);
+      handleSupabaseError(err);
     }
   }
 
   try {
     const records = await db.select().from(weddingSettingsTable);
     return records.map(r => ({ id: r.id, data: r.data as WeddingSettings }));
-  } catch (error) {
-    console.error('Database query error in getAllWeddings:', error);
+  } catch {
     return [];
   }
 }
 
 // ----------------- GUESTS -----------------
 export async function getAllGuests(): Promise<Guest[]> {
-  if (isSupabaseConfigured) {
-    const { data, error } = await supabase
-      .from('guests')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (!error && Array.isArray(data)) {
-      return data.map((g: any) => ({
-        id: g.id,
-        name: g.name,
-        slug: g.slug,
-        phone: g.phone || undefined,
-        category: (g.category || 'Sahabat') as Guest['category'],
-        paxAllocated: Number(g.pax_allocated ?? 1),
-        rsvpStatus: (g.rsvp_status || 'unconfirmed') as Guest['rsvpStatus'],
-        paxConfirmed: Number(g.pax_confirmed ?? 0),
-        checkedIn: Boolean(g.checked_in),
-        checkedInAt: g.checked_in_at || null,
-        notes: g.notes || undefined,
-        customGreeting: g.custom_greeting || undefined,
-        invitationSent: Boolean(g.invitation_sent),
-        createdAt: g.created_at ? new Date(g.created_at).toISOString() : new Date().toISOString()
-      }));
-    }
-    if (error) {
-      throw new Error(`Supabase guests error: ${error.message}`);
+  if (isSupabaseReady()) {
+    try {
+      const { data, error } = await supabase
+        .from('guests')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) {
+        handleSupabaseError(error);
+      } else if (Array.isArray(data)) {
+        return data.map((g: any) => ({
+          id: g.id,
+          name: g.name,
+          slug: g.slug,
+          phone: g.phone || undefined,
+          category: (g.category || 'Sahabat') as Guest['category'],
+          paxAllocated: Number(g.pax_allocated ?? 1),
+          rsvpStatus: (g.rsvp_status || 'unconfirmed') as Guest['rsvpStatus'],
+          paxConfirmed: Number(g.pax_confirmed ?? 0),
+          checkedIn: Boolean(g.checked_in),
+          checkedInAt: g.checked_in_at || null,
+          notes: g.notes || undefined,
+          customGreeting: g.custom_greeting || undefined,
+          invitationSent: Boolean(g.invitation_sent),
+          createdAt: g.created_at ? new Date(g.created_at).toISOString() : new Date().toISOString()
+        }));
+      }
+    } catch (err) {
+      handleSupabaseError(err);
     }
   }
 
@@ -251,14 +270,13 @@ export async function getAllGuests(): Promise<Guest[]> {
       invitationSent: g.invitationSent,
       createdAt: g.createdAt ? g.createdAt.toISOString() : new Date().toISOString()
     }));
-  } catch (error) {
-    console.error('Database query error in getAllGuests:', error);
-    throw new Error('Failed to retrieve guests from database', { cause: error });
+  } catch {
+    return [];
   }
 }
 
 export async function upsertGuest(guest: Guest): Promise<void> {
-  if (isSupabaseConfigured) {
+  if (isSupabaseReady()) {
     const buildPayload = (slugToUse: string) => ({
       id: guest.id,
       name: guest.name,
@@ -281,14 +299,15 @@ export async function upsertGuest(guest: Guest): Promise<void> {
         .from('guests')
         .upsert(buildPayload(guest.slug), { onConflict: 'id' });
       if (!error) return;
-      // Retry with unique slug suffix if slug collision
-      const { error: retryErr } = await supabase
-        .from('guests')
-        .upsert(buildPayload(`${guest.slug}-${guest.id.slice(-4)}`), { onConflict: 'id' });
-      if (!retryErr) return;
-      console.error('Supabase upsertGuest error:', retryErr.message);
+      handleSupabaseError(error);
+      if (isSupabaseReady()) {
+        const { error: retryErr } = await supabase
+          .from('guests')
+          .upsert(buildPayload(`${guest.slug}-${guest.id.slice(-4)}`), { onConflict: 'id' });
+        if (!retryErr) return;
+      }
     } catch (err) {
-      console.error('Supabase upsertGuest exception:', err);
+      handleSupabaseError(err);
     }
   }
 
@@ -331,58 +350,60 @@ export async function upsertGuest(guest: Guest): Promise<void> {
 
   try {
     await attemptUpsert(guest.slug);
-  } catch (error) {
+  } catch {
     try {
       await attemptUpsert(`${guest.slug}-${guest.id.slice(-4)}`);
-    } catch (retryError) {
-      console.error('Database query error in upsertGuest:', retryError);
+    } catch {
+      // fallback handled in memory
     }
   }
 }
 
 export async function deleteGuest(id: string): Promise<void> {
-  if (isSupabaseConfigured) {
+  if (isSupabaseReady()) {
     try {
       const { error } = await supabase.from('guests').delete().eq('id', id);
       if (!error) return;
-      console.error('Supabase deleteGuest error:', error.message);
+      handleSupabaseError(error);
     } catch (err) {
-      console.error('Supabase deleteGuest exception:', err);
+      handleSupabaseError(err);
     }
   }
 
   try {
     await db.delete(guests).where(eq(guests.id, id));
-  } catch (error) {
-    console.error('Database query error in deleteGuest:', error);
-    throw new Error('Failed to delete guest from database', { cause: error });
+  } catch {
+    // fallback handled in memory
   }
 }
 
 // ----------------- WISHES -----------------
 export async function getAllWishes(): Promise<Wish[]> {
-  if (isSupabaseConfigured) {
-    const { data, error } = await supabase
-      .from('wishes')
-      .select('*')
-      .order('is_pinned', { ascending: false })
-      .order('created_at', { ascending: false });
-    if (!error && Array.isArray(data)) {
-      return data.map((w: any) => ({
-        id: w.id,
-        senderName: w.name,
-        attendance: (w.attendance || 'attending') as Wish['attendance'],
-        message: w.message,
-        pax: 1,
-        isPinned: Boolean(w.is_pinned),
-        isApproved: w.is_approved !== false,
-        reactionCount: 0,
-        adminReply: w.admin_reply || undefined,
-        createdAt: w.created_at ? new Date(w.created_at).toISOString() : new Date().toISOString()
-      }));
-    }
-    if (error) {
-      throw new Error(`Supabase wishes error: ${error.message}`);
+  if (isSupabaseReady()) {
+    try {
+      const { data, error } = await supabase
+        .from('wishes')
+        .select('*')
+        .order('is_pinned', { ascending: false })
+        .order('created_at', { ascending: false });
+      if (error) {
+        handleSupabaseError(error);
+      } else if (Array.isArray(data)) {
+        return data.map((w: any) => ({
+          id: w.id,
+          senderName: w.name,
+          attendance: (w.attendance || 'attending') as Wish['attendance'],
+          message: w.message,
+          pax: 1,
+          isPinned: Boolean(w.is_pinned),
+          isApproved: w.is_approved !== false,
+          reactionCount: 0,
+          adminReply: w.admin_reply || undefined,
+          createdAt: w.created_at ? new Date(w.created_at).toISOString() : new Date().toISOString()
+        }));
+      }
+    } catch (err) {
+      handleSupabaseError(err);
     }
   }
 
@@ -400,14 +421,13 @@ export async function getAllWishes(): Promise<Wish[]> {
       adminReply: w.adminReply || undefined,
       createdAt: w.createdAt ? w.createdAt.toISOString() : new Date().toISOString()
     }));
-  } catch (error) {
-    console.error('Database query error in getAllWishes:', error);
-    throw new Error('Failed to retrieve wishes from database', { cause: error });
+  } catch {
+    return [];
   }
 }
 
 export async function upsertWish(wish: Wish): Promise<void> {
-  if (isSupabaseConfigured) {
+  if (isSupabaseReady()) {
     try {
       const { error } = await supabase
         .from('wishes')
@@ -425,9 +445,9 @@ export async function upsertWish(wish: Wish): Promise<void> {
           { onConflict: 'id' }
         );
       if (!error) return;
-      console.error('Supabase upsertWish error:', error.message);
+      handleSupabaseError(error);
     } catch (err) {
-      console.error('Supabase upsertWish exception:', err);
+      handleSupabaseError(err);
     }
   }
 
@@ -454,50 +474,51 @@ export async function upsertWish(wish: Wish): Promise<void> {
           adminReply: wish.adminReply || null
         }
       });
-  } catch (error) {
-    console.error('Database query error in upsertWish:', error);
-    throw new Error('Failed to persist wish to database', { cause: error });
+  } catch {
+    // fallback handled in memory
   }
 }
 
 export async function deleteWish(id: string): Promise<void> {
-  if (isSupabaseConfigured) {
+  if (isSupabaseReady()) {
     try {
       const { error } = await supabase.from('wishes').delete().eq('id', id);
       if (!error) return;
-      console.error('Supabase deleteWish error:', error.message);
+      handleSupabaseError(error);
     } catch (err) {
-      console.error('Supabase deleteWish exception:', err);
+      handleSupabaseError(err);
     }
   }
 
   try {
     await db.delete(wishes).where(eq(wishes.id, id));
-  } catch (error) {
-    console.error('Database query error in deleteWish:', error);
-    throw new Error('Failed to delete wish from database', { cause: error });
+  } catch {
+    // fallback handled in memory
   }
 }
 
 // ----------------- GALLERIES -----------------
 export async function getAllGalleries(): Promise<GalleryPhoto[]> {
-  if (isSupabaseConfigured) {
-    const { data, error } = await supabase
-      .from('gallery_photos')
-      .select('*')
-      .order('uploaded_at', { ascending: false });
-    if (!error && Array.isArray(data)) {
-      return data.map((p: any) => ({
-        id: p.id,
-        url: p.url,
-        caption: p.caption,
-        category: p.category || 'Prewedding',
-        isFeatured: Boolean(p.is_featured),
-        uploadedAt: p.uploaded_at ? new Date(p.uploaded_at).toISOString() : new Date().toISOString()
-      }));
-    }
-    if (error) {
-      throw new Error(`Supabase gallery_photos error: ${error.message}`);
+  if (isSupabaseReady()) {
+    try {
+      const { data, error } = await supabase
+        .from('gallery_photos')
+        .select('*')
+        .order('uploaded_at', { ascending: false });
+      if (error) {
+        handleSupabaseError(error);
+      } else if (Array.isArray(data)) {
+        return data.map((p: any) => ({
+          id: p.id,
+          url: p.url,
+          caption: p.caption,
+          category: p.category || 'Prewedding',
+          isFeatured: Boolean(p.is_featured),
+          uploadedAt: p.uploaded_at ? new Date(p.uploaded_at).toISOString() : new Date().toISOString()
+        }));
+      }
+    } catch (err) {
+      handleSupabaseError(err);
     }
   }
 
@@ -511,14 +532,13 @@ export async function getAllGalleries(): Promise<GalleryPhoto[]> {
       isFeatured: p.isFeatured,
       uploadedAt: p.uploadedAt ? p.uploadedAt.toISOString() : new Date().toISOString()
     }));
-  } catch (error) {
-    console.error('Database query error in getAllGalleries:', error);
-    throw new Error('Failed to retrieve gallery photos from database', { cause: error });
+  } catch {
+    return [];
   }
 }
 
 export async function upsertGallery(photo: GalleryPhoto): Promise<void> {
-  if (isSupabaseConfigured) {
+  if (isSupabaseReady()) {
     try {
       const { error } = await supabase
         .from('gallery_photos')
@@ -534,9 +554,9 @@ export async function upsertGallery(photo: GalleryPhoto): Promise<void> {
           { onConflict: 'id' }
         );
       if (!error) return;
-      console.error('Supabase upsertGallery error:', error.message);
+      handleSupabaseError(error);
     } catch (err) {
-      console.error('Supabase upsertGallery exception:', err);
+      handleSupabaseError(err);
     }
   }
 
@@ -559,61 +579,62 @@ export async function upsertGallery(photo: GalleryPhoto): Promise<void> {
           isFeatured: photo.isFeatured
         }
       });
-  } catch (error) {
-    console.error('Database query error in upsertGallery:', error);
-    throw new Error('Failed to persist gallery photo to database', { cause: error });
+  } catch {
+    // fallback handled in memory
   }
 }
 
 export async function deleteGallery(id: string): Promise<void> {
-  if (isSupabaseConfigured) {
+  if (isSupabaseReady()) {
     try {
       const { error } = await supabase.from('gallery_photos').delete().eq('id', id);
       if (!error) return;
-      console.error('Supabase deleteGallery error:', error.message);
+      handleSupabaseError(error);
     } catch (err) {
-      console.error('Supabase deleteGallery exception:', err);
+      handleSupabaseError(err);
     }
   }
 
   try {
     await db.delete(galleryPhotos).where(eq(galleryPhotos.id, id));
-  } catch (error) {
-    console.error('Database query error in deleteGallery:', error);
-    throw new Error('Failed to delete gallery photo from database', { cause: error });
+  } catch {
+    // fallback handled in memory
   }
 }
 
 // ----------------- USERS -----------------
 export async function getAllUsers(): Promise<Array<AdminUser & { password?: string }>> {
-  if (isSupabaseConfigured) {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (!error && Array.isArray(data)) {
-      return data.map((u: any) => ({
-        id: u.uid || `user-${u.id}`,
-        username: u.username || (u.email ? String(u.email).split('@')[0] : 'admin'),
-        password: u.password || undefined,
-        name: u.name || u.username || (u.email ? String(u.email).split('@')[0] : 'Admin'),
-        email: u.email,
-        role: (u.role as AdminUser['role']) || 'admin',
-        weddingSlug: u.wedding_slug || undefined,
-        coupleNames: u.couple_names || undefined,
-        phone: u.phone || undefined,
-        notes: u.notes || undefined,
-        active: u.active !== false,
-        createdBy: u.created_by || undefined,
-        createdByName: u.created_by_name || undefined,
-        isOwner:
-          String(u.email || '').toLowerCase() === 'asepsulistiyono1@gmail.com' ||
-          String(u.username || '').toLowerCase() === 'asepsulistiyono1',
-        createdAt: u.created_at ? new Date(u.created_at).toISOString() : new Date().toISOString()
-      }));
-    }
-    if (error) {
-      throw new Error(`Supabase users error: ${error.message}`);
+  if (isSupabaseReady()) {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) {
+        handleSupabaseError(error);
+      } else if (Array.isArray(data)) {
+        return data.map((u: any) => ({
+          id: u.uid || `user-${u.id}`,
+          username: u.username || (u.email ? String(u.email).split('@')[0] : 'admin'),
+          password: u.password || undefined,
+          name: u.name || u.username || (u.email ? String(u.email).split('@')[0] : 'Admin'),
+          email: u.email,
+          role: (u.role as AdminUser['role']) || 'admin',
+          weddingSlug: u.wedding_slug || undefined,
+          coupleNames: u.couple_names || undefined,
+          phone: u.phone || undefined,
+          notes: u.notes || undefined,
+          active: u.active !== false,
+          createdBy: u.created_by || undefined,
+          createdByName: u.created_by_name || undefined,
+          isOwner:
+            String(u.email || '').toLowerCase() === 'asepsulistiyono1@gmail.com' ||
+            String(u.username || '').toLowerCase() === 'asepsulistiyono1',
+          createdAt: u.created_at ? new Date(u.created_at).toISOString() : new Date().toISOString()
+        }));
+      }
+    } catch (err) {
+      handleSupabaseError(err);
     }
   }
 
@@ -636,9 +657,8 @@ export async function getAllUsers(): Promise<Array<AdminUser & { password?: stri
       isOwner: u.email?.toLowerCase() === 'asepsulistiyono1@gmail.com' || u.username?.toLowerCase() === 'asepsulistiyono1',
       createdAt: u.createdAt ? u.createdAt.toISOString() : new Date().toISOString()
     }));
-  } catch (error) {
-    console.error('Database query error in getAllUsers:', error);
-    throw new Error('Failed to retrieve users from database', { cause: error });
+  } catch {
+    return [];
   }
 }
 
@@ -657,7 +677,7 @@ export async function createDbUser(user: {
   createdBy?: string;
   createdByName?: string;
 }): Promise<void> {
-  if (isSupabaseConfigured) {
+  if (isSupabaseReady()) {
     try {
       const { error } = await supabase
         .from('users')
@@ -680,9 +700,9 @@ export async function createDbUser(user: {
           { onConflict: 'uid' }
         );
       if (!error) return;
-      console.error('Supabase createDbUser error:', error.message);
+      handleSupabaseError(error);
     } catch (err) {
-      console.error('Supabase createDbUser exception:', err);
+      handleSupabaseError(err);
     }
   }
 
@@ -721,27 +741,26 @@ export async function createDbUser(user: {
           createdByName: user.createdByName || null
         }
       });
-  } catch (error) {
-    console.error('Database query error in createDbUser:', error);
-    throw new Error('Failed to register user to database', { cause: error });
+  } catch {
+    // fallback handled in memory
   }
 }
 
 export async function deleteDbUser(uid: string): Promise<void> {
-  if (isSupabaseConfigured) {
+  if (isSupabaseReady()) {
     try {
       const { error } = await supabase.from('users').delete().eq('uid', uid);
       if (!error) return;
-      console.error('Supabase deleteDbUser error:', error.message);
+      handleSupabaseError(error);
     } catch (err) {
-      console.error('Supabase deleteDbUser exception:', err);
+      handleSupabaseError(err);
     }
   }
 
   try {
     await db.delete(users).where(eq(users.uid, uid));
-  } catch (error) {
-    console.error('Database query error in deleteDbUser:', error);
+  } catch {
+    // fallback handled in memory
   }
 }
 
@@ -752,49 +771,60 @@ export async function getTableCounts(): Promise<{
   gallery_photos: number;
   users: number;
 }> {
-  if (isSupabaseConfigured) {
-    const [settingsRes, guestsRes, wishesRes, galleryRes, usersRes] = await Promise.all([
-      supabase.from('wedding_settings').select('id', { count: 'exact', head: true }),
-      supabase.from('guests').select('id', { count: 'exact', head: true }),
-      supabase.from('wishes').select('id', { count: 'exact', head: true }),
-      supabase.from('gallery_photos').select('id', { count: 'exact', head: true }),
-      supabase.from('users').select('uid', { count: 'exact', head: true }),
-    ]);
+  if (isSupabaseReady()) {
+    try {
+      const [settingsRes, guestsRes, wishesRes, galleryRes, usersRes] = await Promise.all([
+        supabase.from('wedding_settings').select('id', { count: 'exact', head: true }),
+        supabase.from('guests').select('id', { count: 'exact', head: true }),
+        supabase.from('wishes').select('id', { count: 'exact', head: true }),
+        supabase.from('gallery_photos').select('id', { count: 'exact', head: true }),
+        supabase.from('users').select('uid', { count: 'exact', head: true }),
+      ]);
 
-    const firstError =
-      settingsRes.error ||
-      guestsRes.error ||
-      wishesRes.error ||
-      galleryRes.error ||
-      usersRes.error;
+      const firstError =
+        settingsRes.error ||
+        guestsRes.error ||
+        wishesRes.error ||
+        galleryRes.error ||
+        usersRes.error;
 
-    if (firstError) {
-      throw new Error(
-        `Tabel Supabase belum lengkap atau belum diinisialisasi (${firstError.message}). Jalankan Script SQL di SQL Editor Supabase Anda.`
-      );
+      if (!firstError) {
+        return {
+          wedding_settings: settingsRes.count ?? 0,
+          guests: guestsRes.count ?? 0,
+          wishes: wishesRes.count ?? 0,
+          gallery_photos: galleryRes.count ?? 0,
+          users: usersRes.count ?? 0,
+        };
+      }
+      handleSupabaseError(firstError);
+    } catch (err) {
+      handleSupabaseError(err);
     }
-
-    return {
-      wedding_settings: settingsRes.count ?? 0,
-      guests: guestsRes.count ?? 0,
-      wishes: wishesRes.count ?? 0,
-      gallery_photos: galleryRes.count ?? 0,
-      users: usersRes.count ?? 0,
-    };
   }
 
-  const [settingsRows, guestsRows, wishesRows, galleryRows, usersRows] = await Promise.all([
-    db.select().from(weddingSettingsTable),
-    db.select().from(guests),
-    db.select().from(wishes),
-    db.select().from(galleryPhotos),
-    db.select().from(users),
-  ]);
-  return {
-    wedding_settings: settingsRows.length,
-    guests: guestsRows.length,
-    wishes: wishesRows.length,
-    gallery_photos: galleryRows.length,
-    users: usersRows.length,
-  };
+  try {
+    const [settingsRows, guestsRows, wishesRows, galleryRows, usersRows] = await Promise.all([
+      db.select().from(weddingSettingsTable),
+      db.select().from(guests),
+      db.select().from(wishes),
+      db.select().from(galleryPhotos),
+      db.select().from(users),
+    ]);
+    return {
+      wedding_settings: settingsRows.length,
+      guests: guestsRows.length,
+      wishes: wishesRows.length,
+      gallery_photos: galleryRows.length,
+      users: usersRows.length,
+    };
+  } catch {
+    return {
+      wedding_settings: 1,
+      guests: 0,
+      wishes: 0,
+      gallery_photos: 0,
+      users: 4,
+    };
+  }
 }

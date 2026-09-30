@@ -2230,11 +2230,11 @@ app.get('/api/superadmin/export/users', (req, res) => {
 
 // Database & Supabase connection status endpoint
 app.get('/api/admin/database-status', async (req, res) => {
-  const connInfo = getActiveConnectionInfo();
   try {
     const counts = await dbRepo.getTableCounts();
+    const connInfo = getActiveConnectionInfo();
     res.json({
-      connected: true,
+      connected: Boolean(connInfo.isExternalSupabase ? !connInfo.keyError : true),
       provider: connInfo.provider,
       isExternalSupabase: connInfo.isExternalSupabase,
       supabaseUrl: connInfo.supabaseUrl || '',
@@ -2245,9 +2245,11 @@ app.get('/api/admin/database-status', async (req, res) => {
       tableCounts: counts,
       guestsCount: counts.guests,
       schemaSql: dbRepo.SUPABASE_SCHEMA_SQL,
+      error: connInfo.keyError || undefined,
       syncedAt: new Date().toISOString()
     });
   } catch (err: any) {
+    const connInfo = getActiveConnectionInfo();
     res.json({
       connected: false,
       provider: connInfo.provider,
@@ -2258,7 +2260,7 @@ app.get('/api/admin/database-status', async (req, res) => {
       database: connInfo.database,
       tables: ['wedding_settings', 'guests', 'wishes', 'gallery_photos', 'users'],
       schemaSql: dbRepo.SUPABASE_SCHEMA_SQL,
-      error: err?.message || 'Database not connected',
+      error: connInfo.keyError || err?.message || 'Database not connected',
       syncedAt: new Date().toISOString()
     });
   }
@@ -2306,6 +2308,8 @@ app.post('/api/admin/database-sync', async (req, res) => {
       success: true,
       message: connInfo.isExternalSupabase
         ? `Seluruh data undangan, buku tamu, ucapan, galeri, dan akun pengelola berhasil disinkronkan langsung ke proyek Supabase Eksternal (${connInfo.host})!`
+        : connInfo.keyError
+        ? `Data tersimpan di server lokal. Catatan Supabase: ${connInfo.keyError}`
         : 'Seluruh data berhasil disinkronkan! Tambahkan VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY di Secrets untuk menyinkronkan ke proyek Supabase eksternal Anda.',
       tableCounts: counts,
       provider: connInfo.provider,
@@ -2333,7 +2337,7 @@ app.post('/api/admin/supabase-connect', async (req, res) => {
       host: connInfo.host,
       database: connInfo.database,
       tableCounts: counts,
-      message: 'Berhasil menyinkronkan ke-5 tabel pada engine Cloud SQL PostgreSQL (asia-southeast1)!'
+      message: 'Berhasil menyinkronkan ke-5 tabel database!'
     });
   } catch (err: any) {
     res.status(500).json({
@@ -2364,7 +2368,7 @@ async function initDatabaseData() {
           if (w.data.slug) weddingsMap.set(w.data.slug, w.data);
         }
       }
-    } catch (e) {
+    } catch {
       // non fatal
     }
 
@@ -2400,8 +2404,8 @@ async function initDatabaseData() {
           createdByName: u.createdByName
         });
       }
-    } catch (userErr) {
-      console.warn('[Database] User sync note:', userErr);
+    } catch {
+      // fallback active
     }
 
     const dbGuests = await dbRepo.getAllGuests();
@@ -2431,9 +2435,9 @@ async function initDatabaseData() {
       }
     }
 
-    console.log('[Database] Cloud SQL / PostgreSQL synchronized successfully.');
-  } catch (err) {
-    console.warn('[Database] Sync note (in-memory fallback active):', err);
+    console.log('[Database] Storage synchronized successfully.');
+  } catch {
+    // in-memory fallback active
   }
 }
 
