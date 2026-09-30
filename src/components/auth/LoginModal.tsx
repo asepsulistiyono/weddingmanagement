@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, 
@@ -22,15 +22,36 @@ interface LoginModalProps {
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSuccess }) => {
   const { login } = useAuth();
   
-  // Login form states
+  // Login form states — always start empty
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [inputUnlocked, setInputUnlocked] = useState(false);
+
+  // Reset all fields whenever modal opens or closes so no previous user/owner credentials remain
+  useEffect(() => {
+    setUsername('');
+    setPassword('');
+    setShowPassword(false);
+    setLoading(false);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setInputUnlocked(false);
+  }, [isOpen]);
 
   if (!isOpen) return null;
+
+  const handleCloseModal = () => {
+    setUsername('');
+    setPassword('');
+    setShowPassword(false);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    onClose();
+  };
 
   const handleManualLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,6 +63,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
     setLoading(false);
 
     if (res.success) {
+      setUsername('');
+      setPassword('');
+      setShowPassword(false);
       onSuccess();
       onClose();
     } else {
@@ -59,7 +83,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
           className="relative w-full max-w-md max-h-[calc(100dvh-1.5rem)] sm:max-h-[calc(100dvh-2.5rem)] bg-white rounded-2xl sm:rounded-3xl p-5 sm:p-6 shadow-2xl border border-stone-200 overflow-y-auto overscroll-contain my-auto"
         >
           <button
-            onClick={onClose}
+            type="button"
+            onClick={handleCloseModal}
             className="absolute top-3.5 right-3.5 p-2 text-stone-400 hover:text-stone-700 rounded-full hover:bg-stone-100 transition-colors z-10"
           >
             <X className="w-5 h-5" />
@@ -96,7 +121,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
           )}
 
           {/* Form */}
-          <form onSubmit={handleManualLogin} className="space-y-3">
+          <form onSubmit={handleManualLogin} autoComplete="off" className="space-y-3">
+            {/* Hidden decoy inputs to prevent browser password manager from auto-filling owner credentials */}
+            <input type="text" name="decoy_user" autoComplete="username" className="hidden" tabIndex={-1} readOnly />
+            <input type="password" name="decoy_pass" autoComplete="current-password" className="hidden" tabIndex={-1} readOnly />
+
             <div>
               <label className="block text-[11px] font-semibold text-stone-700 uppercase tracking-wider mb-1">
                 Username atau Email Akun
@@ -107,12 +136,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
                 </div>
                 <input
                   type="text"
+                  name="wedding_manager_login_id"
                   required
+                  autoComplete="off"
                   autoCapitalize="none"
                   autoCorrect="off"
+                  spellCheck={false}
+                  readOnly={!inputUnlocked}
+                  onFocus={() => setInputUnlocked(true)}
                   value={username}
                   onChange={(e) => setUsername(e.target.value.toLowerCase().trim())}
-                  placeholder="Username atau email (cth: superadmin)"
+                  placeholder="Masukkan username atau email"
                   className="w-full pl-9 pr-3.5 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 text-stone-800 font-mono"
                 />
               </div>
@@ -130,7 +164,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
                 </div>
                 <input
                   type={showPassword ? 'text' : 'password'}
+                  name="wedding_manager_login_secret"
                   required
+                  autoComplete="new-password"
+                  readOnly={!inputUnlocked}
+                  onFocus={() => setInputUnlocked(true)}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Masukkan kata sandi"
