@@ -56,6 +56,12 @@ export const getActiveConnectionInfo = () => {
 // Create or retrieve the pool instance.
 const pool = createPool();
 
+pool.query("select 1")
+  .then(() => console.log("Koneksi PostgreSQL berhasil"))
+  .catch((err: Error & { code?: string }) => {
+    console.error("Koneksi PostgreSQL gagal:", err.code ?? err.message);
+  });
+
 // Initialize Drizzle with the pool and schema.
 export const db = drizzle(pool, { schema });
 export { schema };
