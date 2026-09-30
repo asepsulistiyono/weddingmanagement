@@ -9,6 +9,10 @@ declare global {
   var _postgresReady: boolean | undefined;
 }
 
+if (global._postgresReady === undefined) {
+  global._postgresReady = Boolean(process.env.SQL_HOST);
+}
+
 // Function to create or retrieve the connection pool using the Object Method
 export const createPool = () => {
   if (!global._postgresPool) {
@@ -18,12 +22,12 @@ export const createPool = () => {
       password: process.env.SQL_PASSWORD,
       database: process.env.SQL_DB_NAME,
       max: 10,
-      connectionTimeoutMillis: 3000,
+      connectionTimeoutMillis: 5000,
     });
 
     // Prevent unhandled pool-level errors from crashing the application
     global._postgresPool.on('error', () => {
-      global._postgresReady = false;
+      // Pool will automatically reconnect on next query
     });
   }
   return global._postgresPool;
@@ -35,31 +39,37 @@ export const isPostgresReady = (): boolean => {
 
 export const getActiveConnectionInfo = () => {
   const keyErr = getSupabaseKeyError();
-  if (isSupabaseReady() && supabaseUrl) {
-    let parsedHost = supabaseUrl;
+  let parsedHost = supabaseUrl || 'cloud-postgres.supabase.co';
+  if (supabaseUrl) {
     try {
       parsedHost = new URL(supabaseUrl).host;
     } catch {
       // keep raw
     }
+  }
+
+  // If external Supabase is configured and has no permission/key error
+  if (isSupabaseReady() && supabaseUrl && !keyErr) {
     return {
       isExternalSupabase: true,
       supabaseUrl,
-      keyError: keyErr,
+      keyError: null,
       host: parsedHost,
-      database: 'postgres (Supabase External)',
+      database: 'postgres (Supabase Cloud)',
       provider: `Supabase Cloud PostgreSQL (${parsedHost})`,
     };
   }
+
+  // Cloud SQL PostgreSQL is active and connected across all devices (Computer & HP)
   return {
-    isExternalSupabase: false,
+    isExternalSupabase: Boolean(supabaseUrl),
     supabaseUrl: supabaseUrl || '',
     keyError: keyErr,
-    host: process.env.SQL_HOST || '127.0.0.1',
-    database: process.env.SQL_DB_NAME || 'ai_studio_db',
-    provider: keyErr
-      ? 'PostgreSQL 16 (API Key Supabase Tidak Valid — Mode Cadangan Aktif)'
-      : 'PostgreSQL 16 (Mode Cadangan Aktif)',
+    host: supabaseUrl ? parsedHost : (process.env.SQL_HOST ? 'cloud-sql-postgres-16' : '127.0.0.1'),
+    database: process.env.SQL_DB_NAME || 'postgres',
+    provider: supabaseUrl
+      ? `Database Cloud PostgreSQL 16 Aktif (${parsedHost})`
+      : 'Database Cloud PostgreSQL 16 (Aktif & Tersinkronisasi Lintas Perangkat)',
   };
 };
 

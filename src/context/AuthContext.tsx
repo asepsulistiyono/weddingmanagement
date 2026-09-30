@@ -351,30 +351,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ? 'asepsulistiyono1'
         : cleanInput;
 
-    // Step A: If Supabase is configured, try Supabase Auth signInWithPassword first
-    if (isSupabaseConfigured) {
-      const emailCandidate = normalizedIdentifier.includes('@')
-        ? normalizedIdentifier
-        : normalizedIdentifier.toLowerCase() === 'asepsulistiyono1'
-        ? 'asepsulistiyono1@gmail.com'
-        : `${normalizedIdentifier.toLowerCase()}@wedding.local`;
-
-      try {
-        const { data: supaData, error: supaError } = await supabase.auth.signInWithPassword({
-          email: emailCandidate,
-          password,
-        });
-
-        if (!supaError && supaData.session) {
-          await syncSupabaseUserWithBackend(supaData.session);
-          return { success: true };
-        }
-      } catch {
-        // Fallback to backend multi-tenant auth check below
-      }
-    }
-
-    // Step B: Verify against backend multi-tenant Super Admin / Admin WO database (with automatic retry)
+    // Step A: Verify against backend multi-tenant Super Admin / Admin WO PostgreSQL database first (with automatic retry)
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const res = await fetch('/api/auth/login', {
@@ -404,7 +381,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // If server returned 401/400, check local cache in case user was created/reset on client
           const localCheck = authenticateWithLocalCache(normalizedIdentifier, password);
           if (localCheck.success && localCheck.user) {
-            // Sync local user to backend so backend also knows about it
             fetch('/api/superadmin/users', {
               method: 'POST',
               headers: {
@@ -428,6 +404,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (attempt === 0) {
           await new Promise((resolve) => setTimeout(resolve, 450));
         }
+      }
+    }
+
+    // Step B: Fallback to Supabase Auth if configured and backend was unreachable
+    if (isSupabaseConfigured) {
+      const emailCandidate = normalizedIdentifier.includes('@')
+        ? normalizedIdentifier
+        : normalizedIdentifier.toLowerCase() === 'asepsulistiyono1'
+        ? 'asepsulistiyono1@gmail.com'
+        : `${normalizedIdentifier.toLowerCase()}@wedding.local`;
+
+      try {
+        const { data: supaData, error: supaError } = await supabase.auth.signInWithPassword({
+          email: emailCandidate,
+          password,
+        });
+
+        if (!supaError && supaData.session) {
+          await syncSupabaseUserWithBackend(supaData.session);
+          return { success: true };
+        }
+      } catch {
+        // Fallback to local cache check below
       }
     }
 

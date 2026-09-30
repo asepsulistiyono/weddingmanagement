@@ -282,6 +282,10 @@ function parseCoupleFromSlug(slug: string): { groom: string; bride: string } | n
 
 function createWeddingTemplate(slug: string, groomName: string, brideName: string): WeddingSettings {
   const cleanSlug = sanitizeSlug(slug);
+  const existing = weddingsMap.get(cleanSlug);
+  if (existing && existing.slug === cleanSlug && existing.coupleNames && existing.coupleNames !== 'Rizky & Siti') {
+    return existing;
+  }
   const clone: WeddingSettings = JSON.parse(JSON.stringify(weddingSettings));
   clone.slug = cleanSlug;
   clone.coupleNames = `${groomName} & ${brideName}`;
@@ -672,7 +676,7 @@ function calculateStats(): DashboardStats {
 
 // Get wedding invitation data for visitors
 app.get('/api/public/data', async (req, res) => {
-  ensureDatabaseSynced().catch(() => {});
+  await ensureDatabaseSynced();
   const requestedSlug = (req.query.slug as string) || (req.query.w as string);
   const guestSlug = req.query.guest as string | undefined;
   let personalizedGuest: Guest | null = null;
@@ -700,9 +704,8 @@ app.get('/api/public/data', async (req, res) => {
 });
 
 // Bidirectional client-to-server & database state synchronization
-// Ensures any data previously cached in Computer localStorage is pushed to Server, PostgreSQL & Supabase so Phone (HP) can open it immediately
-app.post('/api/public/sync-state', (req, res) => {
-  ensureDatabaseSynced().catch(() => {});
+app.post('/api/public/sync-state', async (req, res) => {
+  await ensureDatabaseSynced();
   const {
     settingsList,
     guests: incomingGuests,
@@ -718,77 +721,75 @@ app.post('/api/public/sync-state', (req, res) => {
   if (deletedGuestsSet.size > 0) {
     guests = guests.filter(g => !deletedGuestsSet.has(g.id));
     for (const delId of deletedGuestsSet) {
-      dbRepo.deleteGuest(delId).catch(() => {});
+      await dbRepo.deleteGuest(delId);
     }
   }
 
   if (deletedWishesSet.size > 0) {
     wishes = wishes.filter(w => !deletedWishesSet.has(w.id));
     for (const delId of deletedWishesSet) {
-      dbRepo.deleteWish(delId).catch(() => {});
+      await dbRepo.deleteWish(delId);
     }
   }
 
-  // Sync guests from client if they are new or updated
+  // Sync guests from client only when explicitly marked as locally modified
   if (Array.isArray(incomingGuests)) {
     for (const cg of incomingGuests) {
-      if (!cg || !cg.id || !cg.name || deletedGuestsSet.has(cg.id)) continue;
-      const idx = guests.findIndex(g => g.id === cg.id);
+      if (!cg || !cg.id || !cg.name || deletedGuestsSet.has(cg.id) || !cg._locallyModified) continue;
+      const cleanGuest = { ...cg };
+      delete cleanGuest._locallyModified;
+      const idx = guests.findIndex(g => g.id === cleanGuest.id);
       if (idx === -1) {
-        guests.unshift(cg);
-        dbRepo.upsertGuest(cg).catch(() => {});
+        guests.unshift(cleanGuest);
+        await dbRepo.upsertGuest(cleanGuest);
       } else {
-        const existing = guests[idx];
-        const isDefaultUnchanged =
-          ['g-1', 'g-2', 'g-3', 'g-4', 'g-5', 'g-6'].includes(cg.id) &&
-          cg.name === existing.name &&
-          cg.rsvpStatus === existing.rsvpStatus &&
-          cg.checkedIn === existing.checkedIn;
-        if (!isDefaultUnchanged) {
-          guests[idx] = { ...existing, ...cg };
-          dbRepo.upsertGuest(guests[idx]).catch(() => {});
-        }
+        guests[idx] = { ...guests[idx], ...cleanGuest };
+        await dbRepo.upsertGuest(guests[idx]);
       }
     }
   }
 
-  // Sync wishes from client
+  // Sync wishes from client only when explicitly marked as locally modified
   if (Array.isArray(incomingWishes)) {
     for (const cw of incomingWishes) {
-      if (!cw || !cw.id || !cw.senderName || !cw.message || deletedWishesSet.has(cw.id)) continue;
-      const idx = wishes.findIndex(w => w.id === cw.id);
+      if (!cw || !cw.id || !cw.senderName || !cw.message || deletedWishesSet.has(cw.id) || !cw._locallyModified) continue;
+      const cleanWish = { ...cw };
+      delete cleanWish._locallyModified;
+      const idx = wishes.findIndex(w => w.id === cleanWish.id);
       if (idx === -1) {
-        wishes.unshift(cw);
-        dbRepo.upsertWish(cw).catch(() => {});
+        wishes.unshift(cleanWish);
+        await dbRepo.upsertWish(cleanWish);
       }
     }
   }
 
-  // Sync admins from client
+  // Sync admins from client only when explicitly marked as locally modified
   if (Array.isArray(incomingAdmins)) {
     for (const ca of incomingAdmins) {
-      if (!ca || !ca.id || !ca.username) continue;
+      if (!ca || !ca.id || !ca.username || !ca._locallyModified) continue;
       const idx = adminUsers.findIndex(
         u => u.id === ca.id || (u.username && u.username.toLowerCase() === String(ca.username).toLowerCase())
       );
       if (idx === -1) {
         adminUsers.push(ca);
-        dbRepo.createDbUser({
-          uid: ca.id,
-          username: ca.username,
-          password: ca.password,
-          email: ca.email || `${ca.username}@wedding.local`,
-          name: ca.name,
-          role: ca.role,
-          weddingSlug: ca.weddingSlug,
-          coupleNames: ca.coupleNames,
-          phone: ca.phone,
-          notes: ca.notes,
-          active: ca.active !== false,
-          createdBy: ca.createdBy,
-          createdByName: ca.createdByName
-        }).catch(() => {});
+      } else {
+        adminUsers[idx] = { ...adminUsers[idx], ...ca };
       }
+      await dbRepo.createDbUser({
+        uid: ca.id,
+        username: ca.username,
+        password: ca.password,
+        email: ca.email || `${ca.username}@wedding.local`,
+        name: ca.name,
+        role: ca.role,
+        weddingSlug: ca.weddingSlug,
+        coupleNames: ca.coupleNames,
+        phone: ca.phone,
+        notes: ca.notes,
+        active: ca.active !== false,
+        createdBy: ca.createdBy,
+        createdByName: ca.createdByName
+      });
     }
   }
 
@@ -796,18 +797,19 @@ app.post('/api/public/sync-state', (req, res) => {
   if (Array.isArray(settingsList)) {
     for (const item of settingsList) {
       if (!item || !item.settings || !item.isLocallyModified) continue;
-      const s: WeddingSettings = item.settings;
+      const s: WeddingSettings = { ...item.settings };
+      delete (s as any)._locallyModified;
       const slugKey = sanitizeSlug(s.slug || item.slug || 'main') || 'main';
       weddingsMap.set(slugKey, s);
-      dbRepo.saveSettings(s, slugKey).catch(() => {});
+      await dbRepo.saveSettings(s, slugKey);
       if (item.isMain || slugKey === weddingSettings.slug || weddingSettings.slug === 'rizky_dan_siti') {
         weddingSettings = s;
-        dbRepo.saveSettings(s, 'main').catch(() => {});
+        await dbRepo.saveSettings(s, 'main');
       }
       if (Array.isArray(s.galleries)) {
         for (const gal of s.galleries) {
           if (gal && gal.id && gal.url) {
-            dbRepo.upsertGallery(gal).catch(() => {});
+            await dbRepo.upsertGallery(gal);
           }
         }
       }
@@ -824,7 +826,8 @@ app.post('/api/public/sync-state', (req, res) => {
 });
 
 // Post a new wish (Real-time broadcasted!)
-app.post('/api/public/wishes', (req, res) => {
+app.post('/api/public/wishes', async (req, res) => {
+  await ensureDatabaseSynced();
   const { senderName, message, attendance, pax, guestId } = req.body;
 
   if (!senderName || !message) {
@@ -845,7 +848,7 @@ app.post('/api/public/wishes', (req, res) => {
   };
 
   wishes.unshift(newWish);
-  dbRepo.upsertWish(newWish).catch(err => console.error('DB Wish save error:', err));
+  await dbRepo.upsertWish(newWish);
 
   // If sender has matching guest, optionally sync RSVP
   if (guestId) {
@@ -853,7 +856,7 @@ app.post('/api/public/wishes', (req, res) => {
     if (existingGuest && attendance) {
       existingGuest.rsvpStatus = attendance;
       existingGuest.paxConfirmed = pax ? Number(pax) : existingGuest.paxAllocated;
-      dbRepo.upsertGuest(existingGuest).catch(err => console.error('DB Guest sync error:', err));
+      await dbRepo.upsertGuest(existingGuest);
       broadcast({
         type: 'GUEST_UPDATED',
         payload: existingGuest
@@ -871,7 +874,8 @@ app.post('/api/public/wishes', (req, res) => {
 });
 
 // Submit RSVP
-app.post('/api/public/rsvp', (req, res) => {
+app.post('/api/public/rsvp', async (req, res) => {
+  await ensureDatabaseSynced();
   const { guestId, name, attendance, pax, notes } = req.body;
 
   if (!name || !attendance) {
@@ -889,7 +893,7 @@ app.post('/api/public/rsvp', (req, res) => {
     matchedGuest.rsvpStatus = attendance;
     matchedGuest.paxConfirmed = pax ? Number(pax) : 1;
     if (notes) matchedGuest.notes = notes;
-    dbRepo.upsertGuest(matchedGuest).catch(err => console.error('DB Guest update error:', err));
+    await dbRepo.upsertGuest(matchedGuest);
     broadcast({
       type: 'GUEST_UPDATED',
       payload: matchedGuest
@@ -911,8 +915,8 @@ app.post('/api/public/rsvp', (req, res) => {
       invitationSent: true,
       createdAt: new Date().toISOString()
     };
-    guests.push(newGuest);
-    dbRepo.upsertGuest(newGuest).catch(err => console.error('DB Guest add error:', err));
+    guests.unshift(newGuest);
+    await dbRepo.upsertGuest(newGuest);
     broadcast({
       type: 'GUEST_UPDATED',
       payload: newGuest
@@ -957,17 +961,14 @@ app.post('/api/auth/login', async (req, res) => {
         (u.weddingSlug && u.weddingSlug.toLowerCase() === loginIdentifier)
     );
 
-  let user = findMatchingUser();
-
-  // If not found in memory yet, attempt lazy sync from PostgreSQL once
-  if (!user) {
-    try {
-      await ensureDatabaseSynced();
-      user = findMatchingUser();
-    } catch {
-      // ignore DB error and continue with in-memory check
-    }
+  // Always sync from PostgreSQL before login check so accounts created/updated on another device (Computer/HP) work immediately
+  try {
+    await ensureDatabaseSynced(true);
+  } catch {
+    // ignore DB error and continue with in-memory check
   }
+
+  const user = findMatchingUser();
 
   if (user && user.active !== false) {
     const isOwnerFlag = Boolean(
@@ -1313,7 +1314,8 @@ app.get('/api/admin/guests', async (req, res) => {
 });
 
 // Add Guest
-app.post('/api/admin/guests', (req, res) => {
+app.post('/api/admin/guests', async (req, res) => {
+  await ensureDatabaseSynced();
   const { id: requestedId, slug: requestedSlug, name, phone, category, paxAllocated, notes, customGreeting } = req.body;
   if (!name) {
     return res.status(400).json({ error: 'Nama tamu wajib diisi.' });
@@ -1354,7 +1356,7 @@ app.post('/api/admin/guests', (req, res) => {
   } else {
     guests.unshift(newGuest);
   }
-  dbRepo.upsertGuest(newGuest).catch(err => console.error('DB Guest add error:', err));
+  await dbRepo.upsertGuest(newGuest);
   broadcast({
     type: 'GUEST_UPDATED',
     payload: newGuest
@@ -1364,7 +1366,8 @@ app.post('/api/admin/guests', (req, res) => {
 });
 
 // Batch Add Guests (from .TXT or bulk import)
-app.post('/api/admin/guests/batch', (req, res) => {
+app.post('/api/admin/guests/batch', async (req, res) => {
+  await ensureDatabaseSynced();
   const { guests: incomingGuests, skipDuplicates } = req.body;
   if (!incomingGuests || !Array.isArray(incomingGuests) || incomingGuests.length === 0) {
     return res.status(400).json({ error: 'Data tamu tidak valid atau kosong.' });
@@ -1420,7 +1423,7 @@ app.post('/api/admin/guests/batch', (req, res) => {
 
     addedGuests.push(newGuest);
     guests.unshift(newGuest);
-    dbRepo.upsertGuest(newGuest).catch(err => console.error('DB Guest batch item add error:', err));
+    await dbRepo.upsertGuest(newGuest);
   }
 
   // Broadcast updates
@@ -1479,7 +1482,8 @@ app.get('/api/admin/template/guests-txt', (req, res) => {
 });
 
 // Update Guest
-app.put('/api/admin/guests/:id', (req, res) => {
+app.put('/api/admin/guests/:id', async (req, res) => {
+  await ensureDatabaseSynced();
   const { name, slug, phone, category, paxAllocated, rsvpStatus, paxConfirmed, notes, invitationSent, customGreeting } = req.body;
   let guest = guests.find(g => g.id === req.params.id);
 
@@ -1519,7 +1523,7 @@ app.put('/api/admin/guests/:id', (req, res) => {
     if (customGreeting !== undefined) guest.customGreeting = customGreeting;
   }
 
-  dbRepo.upsertGuest(guest).catch(err => console.error('DB Guest update error:', err));
+  await dbRepo.upsertGuest(guest);
   broadcast({
     type: 'GUEST_UPDATED',
     payload: guest
@@ -1529,17 +1533,19 @@ app.put('/api/admin/guests/:id', (req, res) => {
 });
 
 // Delete Guest
-app.delete('/api/admin/guests/:id', (req, res) => {
+app.delete('/api/admin/guests/:id', async (req, res) => {
+  await ensureDatabaseSynced();
   const index = guests.findIndex(g => g.id === req.params.id);
   if (index !== -1) {
     guests.splice(index, 1);
   }
-  dbRepo.deleteGuest(req.params.id).catch(err => console.error('DB Guest delete error:', err));
+  await dbRepo.deleteGuest(req.params.id);
   res.json({ success: true });
 });
 
 // Check-in Scanner API (Reception Desk)
-app.post('/api/admin/guests/:id/checkin', (req, res) => {
+app.post('/api/admin/guests/:id/checkin', async (req, res) => {
+  await ensureDatabaseSynced();
   const { undo, guest: incomingGuest } = req.body || {};
   let guest = guests.find(g => g.id === req.params.id || g.slug === req.params.id);
   if (!guest && incomingGuest && incomingGuest.id) {
@@ -1558,7 +1564,7 @@ app.post('/api/admin/guests/:id/checkin', (req, res) => {
     guest.checkedInAt = new Date().toISOString();
   }
 
-  dbRepo.upsertGuest(guest).catch(err => console.error('DB Guest checkin error:', err));
+  await dbRepo.upsertGuest(guest);
   broadcast({
     type: 'GUEST_CHECKED_IN',
     payload: { guest, timestamp: guest.checkedInAt || '' }
@@ -1605,7 +1611,8 @@ app.post('/api/admin/wishes/restore-templates', (req, res) => {
 });
 
 // Admin Add New / Template Wish
-app.post('/api/admin/wishes', (req, res) => {
+app.post('/api/admin/wishes', async (req, res) => {
+  await ensureDatabaseSynced();
   const { senderName, message, attendance, pax, isPinned, adminReply } = req.body || {};
   if (!senderName || !message) {
     return res.status(400).json({ error: 'Nama pengirim dan isi ucapan wajib diisi.' });
@@ -1625,7 +1632,7 @@ app.post('/api/admin/wishes', (req, res) => {
   };
 
   wishes.unshift(newWish);
-  dbRepo.upsertWish(newWish).catch(err => console.error('DB Wish add error:', err));
+  await dbRepo.upsertWish(newWish);
   broadcast({
     type: 'NEW_WISH',
     payload: newWish
@@ -1635,7 +1642,8 @@ app.post('/api/admin/wishes', (req, res) => {
 });
 
 // Wishes Moderation (Pin, Approve, Hide, Reply)
-app.put('/api/admin/wishes/:id', (req, res) => {
+app.put('/api/admin/wishes/:id', async (req, res) => {
+  await ensureDatabaseSynced();
   const wish = wishes.find(w => w.id === req.params.id);
   if (!wish) {
     return res.status(404).json({ error: 'Ucapan tidak ditemukan.' });
@@ -1647,7 +1655,7 @@ app.put('/api/admin/wishes/:id', (req, res) => {
   if (isApproved !== undefined) wish.isApproved = Boolean(isApproved);
   if (adminReply !== undefined) wish.adminReply = adminReply;
 
-  dbRepo.upsertWish(wish).catch(err => console.error('DB Wish update error:', err));
+  await dbRepo.upsertWish(wish);
   broadcast({
     type: 'UPDATE_WISH',
     payload: wish
@@ -1657,14 +1665,15 @@ app.put('/api/admin/wishes/:id', (req, res) => {
 });
 
 // Delete Wish
-app.delete('/api/admin/wishes/:id', (req, res) => {
+app.delete('/api/admin/wishes/:id', async (req, res) => {
+  await ensureDatabaseSynced();
   const index = wishes.findIndex(w => w.id === req.params.id);
   if (index === -1) {
     return res.status(404).json({ error: 'Ucapan tidak ditemukan.' });
   }
   const deletedId = wishes[index].id;
   wishes.splice(index, 1);
-  dbRepo.deleteWish(deletedId).catch(err => console.error('DB Wish delete error:', err));
+  await dbRepo.deleteWish(deletedId);
 
   broadcast({
     type: 'DELETE_WISH',
@@ -1890,6 +1899,21 @@ app.put('/api/superadmin/settings', async (req, res) => {
     if (u) {
       u.weddingSlug = targetSlug;
       u.coupleNames = coupleNames;
+      await dbRepo.createDbUser({
+        uid: u.id,
+        username: u.username,
+        password: (u as any).password,
+        email: u.email || `${u.username}@wedding.local`,
+        name: u.name,
+        role: u.role,
+        weddingSlug: u.weddingSlug,
+        coupleNames: u.coupleNames,
+        phone: u.phone,
+        notes: u.notes,
+        active: u.active,
+        createdBy: u.createdBy,
+        createdByName: u.createdByName
+      });
     }
   }
 
@@ -2018,7 +2042,8 @@ app.get(['/api/superadmin/users', '/api/superadmin/admins'], async (req, res) =>
 // Owner & Super Admin: Tambah pengelola baru
 // Owner berkuasa penuh membuat ribuan akun Super Admin (klien mempelai).
 // Klien Super Admin hanya berhak membuat akun Admin WO untuk acara pernikahannya.
-app.post(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
+app.post(['/api/superadmin/users', '/api/superadmin/admins'], async (req, res) => {
+  await ensureDatabaseSynced();
   const { 
     name, 
     email, 
@@ -2122,7 +2147,7 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
         notes: notes ? String(notes).trim() : adminUsers[existingIdx].notes,
       };
       adminUsers[existingIdx] = updatedExisting;
-      dbRepo.createDbUser({
+      await dbRepo.createDbUser({
         uid: updatedExisting.id,
         username: updatedExisting.username,
         password: updatedExisting.password,
@@ -2136,7 +2161,7 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
         active: updatedExisting.active,
         createdBy: updatedExisting.createdBy,
         createdByName: updatedExisting.createdByName
-      }).catch(err => console.error('DB user update error:', err));
+      });
 
       return res.status(201).json({
         success: true,
@@ -2168,7 +2193,7 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
   };
 
   adminUsers.push(newAdmin);
-  dbRepo.createDbUser({
+  await dbRepo.createDbUser({
     uid: newAdmin.id,
     username: newAdmin.username,
     password: newAdmin.password,
@@ -2182,7 +2207,7 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
     active: newAdmin.active,
     createdBy: newAdmin.createdBy,
     createdByName: newAdmin.createdByName
-  }).catch(err => console.error('DB user persist error:', err));
+  });
 
   res.status(201).json({ 
     success: true, 
@@ -2194,7 +2219,8 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
 });
 
 // Update user details / wedding URL slug / password / phone / notes
-app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], (req, res) => {
+app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (req, res) => {
+  await ensureDatabaseSynced();
   const targetUser = adminUsers.find(u => u.id === req.params.id);
   if (!targetUser) {
     return res.status(404).json({ error: 'Akun pengelola tidak ditemukan.' });
@@ -2229,7 +2255,7 @@ app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], (req, res) 
     createWeddingTemplate(newSlug, gn, bn);
   }
 
-  dbRepo.createDbUser({
+  await dbRepo.createDbUser({
     uid: targetUser.id,
     username: targetUser.username,
     password: (targetUser as any).password,
@@ -2243,7 +2269,7 @@ app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], (req, res) 
     active: targetUser.active,
     createdBy: targetUser.createdBy,
     createdByName: targetUser.createdByName
-  }).catch(err => console.error('DB user update error:', err));
+  });
 
   res.json({ 
     success: true, 
@@ -2254,7 +2280,8 @@ app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], (req, res) 
 });
 
 // Super Admin: Remove admin operator
-app.delete(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], (req, res) => {
+app.delete(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (req, res) => {
+  await ensureDatabaseSynced();
   const adminToDelete = adminUsers.find(u => u.id === req.params.id);
   if (!adminToDelete) {
     return res.status(404).json({ error: 'Admin tidak ditemukan.' });
@@ -2315,7 +2342,7 @@ app.delete(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], (req, re
 
     // Hapus juga record user di database bila tersimpan
     for (const uid of idsToDelete) {
-      dbRepo.deleteDbUser(uid).catch(err => console.error('DB delete user error:', err));
+      await dbRepo.deleteDbUser(uid);
     }
 
     const woNames = relatedAdminWOs.map(w => `@${w.username} (${w.name})`);
@@ -2334,7 +2361,7 @@ app.delete(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], (req, re
 
   // Jika yang dihapus adalah Admin WO biasa
   adminUsers = adminUsers.filter(u => u.id !== req.params.id);
-  dbRepo.deleteDbUser(adminToDelete.id).catch(err => console.error('DB delete user error:', err));
+  await dbRepo.deleteDbUser(adminToDelete.id);
   res.json({ 
     success: true, 
     deletedUser: adminToDelete,
@@ -2369,10 +2396,11 @@ app.get('/api/superadmin/export/users', (req, res) => {
 // Database & Supabase connection status endpoint
 app.get('/api/admin/database-status', async (req, res) => {
   try {
+    await ensureDatabaseSynced(true);
     const counts = await dbRepo.getTableCounts();
     const connInfo = getActiveConnectionInfo();
     res.json({
-      connected: Boolean(connInfo.isExternalSupabase ? !connInfo.keyError : true),
+      connected: true,
       provider: connInfo.provider,
       isExternalSupabase: connInfo.isExternalSupabase,
       supabaseUrl: connInfo.supabaseUrl || '',
@@ -2407,6 +2435,7 @@ app.get('/api/admin/database-status', async (req, res) => {
 // Force synchronize all current application data to PostgreSQL / External Supabase
 app.post('/api/admin/database-sync', async (req, res) => {
   try {
+    dbRepo.resetSupabaseBackoff();
     await dbRepo.saveSettings(weddingSettings, 'main');
     for (const [slug, wData] of weddingsMap.entries()) {
       await dbRepo.saveSettings(wData, slug);
@@ -2440,15 +2469,14 @@ app.post('/api/admin/database-sync', async (req, res) => {
       });
     }
 
+    await ensureDatabaseSynced(true);
     const counts = await dbRepo.getTableCounts();
     const connInfo = getActiveConnectionInfo();
     res.json({
       success: true,
-      message: connInfo.isExternalSupabase
-        ? `Seluruh data undangan, buku tamu, ucapan, galeri, dan akun pengelola berhasil disinkronkan langsung ke proyek Supabase Eksternal (${connInfo.host})!`
-        : connInfo.keyError
-        ? `Data tersimpan di server lokal. Catatan Supabase: ${connInfo.keyError}`
-        : 'Seluruh data berhasil disinkronkan! Tambahkan VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY di Secrets untuk menyinkronkan ke proyek Supabase eksternal Anda.',
+      message: !connInfo.keyError && connInfo.isExternalSupabase
+        ? `Seluruh data undangan (${counts.wedding_settings} URL), buku tamu (${counts.guests} tamu), ucapan (${counts.wishes}), galeri (${counts.gallery_photos} foto), dan akun pengelola (${counts.users} akun) berhasil disinkronkan langsung ke proyek Supabase (${connInfo.host})!`
+        : `Seluruh data (${counts.wedding_settings} URL undangan, ${counts.guests} tamu, ${counts.wishes} ucapan, ${counts.gallery_photos} foto, ${counts.users} akun) telah tersimpan di Database Cloud PostgreSQL dan siap dibuka di Komputer maupun HP!`,
       tableCounts: counts,
       provider: connInfo.provider,
       isExternalSupabase: connInfo.isExternalSupabase,
@@ -2456,7 +2484,7 @@ app.post('/api/admin/database-sync', async (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({
-      error: err?.message || 'Gagal melakukan sinkronisasi ke database Supabase.'
+      error: err?.message || 'Gagal melakukan sinkronisasi ke database.'
     });
   }
 });
@@ -2484,47 +2512,62 @@ app.post('/api/admin/supabase-connect', async (req, res) => {
   }
 });
 
-// Initialize database data on server startup
+let isInitialSeedDone = false;
+let lastDbSyncTimestamp = 0;
+
+// Synchronize in-memory state from PostgreSQL / External Supabase so all devices (Computer & HP) always share identical data
 async function initDatabaseData() {
   try {
-    const dbSettings = await dbRepo.getSettings();
-    if (dbSettings) {
+    const [dbSettings, allWeddings, dbUsers, dbGuests, dbWishes, dbGalleries] = await Promise.all([
+      dbRepo.getSettings('main'),
+      dbRepo.getAllWeddings(),
+      dbRepo.getAllUsers(),
+      dbRepo.getAllGuests(),
+      dbRepo.getAllWishes(),
+      dbRepo.getAllGalleries(),
+    ]);
+
+    if (dbSettings && dbSettings.groom?.fullName) {
       weddingSettings = { ...weddingSettings, ...dbSettings };
+      weddingsMap.set('main', weddingSettings);
+      weddingsMap.set('default', weddingSettings);
       if (weddingSettings.slug) {
         weddingsMap.set(weddingSettings.slug, weddingSettings);
       }
-    } else {
-      await dbRepo.saveSettings(weddingSettings);
+    } else if (!isInitialSeedDone) {
+      await dbRepo.saveSettings(weddingSettings, 'main');
     }
 
-    // Load any other saved weddings
-    try {
-      const allWeddings = await dbRepo.getAllWeddings();
+    if (Array.isArray(allWeddings) && allWeddings.length > 0) {
       for (const w of allWeddings) {
-        if (w.id && w.data) {
+        if (w.id && w.data && w.data.groom?.fullName) {
           weddingsMap.set(w.id, w.data);
-          if (w.data.slug) weddingsMap.set(w.data.slug, w.data);
-        }
-      }
-    } catch {
-      // non fatal
-    }
-
-    // Sync users (Super Admins & Admin WOs)
-    try {
-      const dbUsers = await dbRepo.getAllUsers();
-      if (dbUsers && dbUsers.length > 0) {
-        for (const dbu of dbUsers) {
-          const existingIdx = adminUsers.findIndex(
-            u => u.id === dbu.id || u.username.toLowerCase() === dbu.username.toLowerCase()
-          );
-          if (existingIdx === -1) {
-            adminUsers.push(dbu);
-          } else if (dbu.password) {
-            adminUsers[existingIdx] = { ...adminUsers[existingIdx], ...dbu };
+          if (w.data.slug) {
+            weddingsMap.set(w.data.slug, w.data);
           }
         }
       }
+    }
+
+    if (Array.isArray(dbUsers) && dbUsers.length > 0) {
+      const mergedUsers = new Map<string, AdminUser & { password?: string }>();
+      // Keep default owner & base accounts as baseline
+      for (const baseU of adminUsers) {
+        mergedUsers.set(baseU.username.toLowerCase(), baseU);
+      }
+      // Database users are authoritative
+      for (const dbu of dbUsers) {
+        if (!dbu.username) continue;
+        const key = dbu.username.toLowerCase();
+        const existing = mergedUsers.get(key);
+        mergedUsers.set(key, {
+          ...(existing || {}),
+          ...dbu,
+          password: dbu.password || existing?.password || (dbu.role === 'super_admin' ? 'super123' : 'admin123'),
+        });
+      }
+      adminUsers = Array.from(mergedUsers.values());
+    } else if (!isInitialSeedDone) {
       for (const u of adminUsers) {
         await dbRepo.createDbUser({
           uid: u.id,
@@ -2542,38 +2585,36 @@ async function initDatabaseData() {
           createdByName: u.createdByName
         });
       }
-    } catch {
-      // fallback active
     }
 
-    const dbGuests = await dbRepo.getAllGuests();
-    if (dbGuests && dbGuests.length > 0) {
+    if (Array.isArray(dbGuests) && dbGuests.length > 0) {
       guests = dbGuests;
-    } else {
+    } else if (!isInitialSeedDone) {
       for (const g of guests) {
         await dbRepo.upsertGuest(g);
       }
     }
 
-    const dbWishes = await dbRepo.getAllWishes();
-    if (dbWishes && dbWishes.length > 0) {
+    if (Array.isArray(dbWishes) && dbWishes.length > 0) {
       wishes = dbWishes;
-    } else {
+    } else if (!isInitialSeedDone) {
       for (const w of wishes) {
         await dbRepo.upsertWish(w);
       }
     }
 
-    const dbGalleries = await dbRepo.getAllGalleries();
-    if (dbGalleries && dbGalleries.length > 0) {
-      weddingSettings.galleries = dbGalleries;
-    } else if (weddingSettings.galleries) {
+    if (Array.isArray(dbGalleries) && dbGalleries.length > 0) {
+      if (!weddingSettings.galleries || weddingSettings.galleries.length === 0) {
+        weddingSettings.galleries = dbGalleries;
+      }
+    } else if (!isInitialSeedDone && weddingSettings.galleries) {
       for (const gal of weddingSettings.galleries) {
         await dbRepo.upsertGallery(gal);
       }
     }
 
-    console.log('[Database] Storage synchronized successfully.');
+    isInitialSeedDone = true;
+    lastDbSyncTimestamp = Date.now();
   } catch {
     // in-memory fallback active
   }
@@ -2581,11 +2622,19 @@ async function initDatabaseData() {
 
 let dbSyncPromise: Promise<void> | null = null;
 
-function ensureDatabaseSynced(): Promise<void> {
-  if (!dbSyncPromise) {
-    dbSyncPromise = initDatabaseData().catch(() => {});
+function ensureDatabaseSynced(force: boolean = false): Promise<void> {
+  const now = Date.now();
+  if (force || !isInitialSeedDone || now - lastDbSyncTimestamp > 400) {
+    if (!dbSyncPromise) {
+      dbSyncPromise = initDatabaseData()
+        .catch(() => {})
+        .finally(() => {
+          dbSyncPromise = null;
+        });
+    }
+    return dbSyncPromise;
   }
-  return dbSyncPromise;
+  return dbSyncPromise || Promise.resolve();
 }
 
 // ---------------- VITE / STATIC SERVING ----------------

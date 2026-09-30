@@ -247,21 +247,16 @@ function mergeServerAndLocalGuests(serverList: Guest[], localList: Guest[]): Gue
   const deleted = getDeletedIds(DELETED_GUESTS_KEY);
   const byId = new Map<string, Guest>();
 
-  // First put local cached guests (so any unsynced guest created offline isn't lost)
-  for (const g of localList) {
-    if (g && g.id && !deleted.has(g.id)) {
-      byId.set(g.id, g);
-    }
-  }
-
-  // Server guests are authoritative so edits from Computer immediately appear on Phone (HP)
+  // Server guests from PostgreSQL database are 100% authoritative across Computer & HP
   for (const sg of serverList) {
     if (!sg || !sg.id || deleted.has(sg.id)) continue;
-    const existingLocal = byId.get(sg.id);
-    if (existingLocal) {
-      byId.set(sg.id, { ...existingLocal, ...sg });
-    } else {
-      byId.set(sg.id, sg);
+    byId.set(sg.id, sg);
+  }
+
+  // Only keep local cached guests that were explicitly modified locally and not yet saved on server
+  for (const g of localList) {
+    if (g && g.id && !deleted.has(g.id) && (g as any)._locallyModified && !byId.has(g.id)) {
+      byId.set(g.id, g);
     }
   }
 
@@ -357,7 +352,7 @@ function mergeServerAndLocalGalleries(
   }
 
   for (const p of cached) {
-    if (p && p.id && !deleted.has(p.id) && !byId.has(p.id)) {
+    if (p && p.id && !deleted.has(p.id) && (p as any)._locallyModified && !byId.has(p.id)) {
       byId.set(p.id, p);
     }
   }
@@ -368,6 +363,8 @@ function mergeServerAndLocalGalleries(
 async function pushLocalCacheToServer(): Promise<void> {
   try {
     const settingsList: Array<{ slug: string; settings: WeddingSettings; isLocallyModified: boolean; isMain: boolean }> = [];
+    const syncedSettingsKeys: string[] = [];
+
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key && key.startsWith('wedding_settings_cache_')) {
@@ -376,16 +373,14 @@ async function pushLocalCacheToServer(): Promise<void> {
         if (!raw) continue;
         try {
           const parsed = JSON.parse(raw) as WeddingSettings & { _locallyModified?: boolean };
-          const isModified =
-            Boolean(parsed._locallyModified) ||
-            (parsed.coupleNames && parsed.coupleNames !== 'Rizky & Siti');
-          if (parsed && isModified) {
+          if (parsed && parsed._locallyModified === true) {
             settingsList.push({
               slug,
               settings: parsed,
               isLocallyModified: true,
               isMain: slug === 'default' || slug === 'main' || !window.location.hash,
             });
+            syncedSettingsKeys.push(key);
           }
         } catch {
           // ignore
@@ -398,18 +393,32 @@ async function pushLocalCacheToServer(): Promise<void> {
       const rawAdmins = localStorage.getItem('wedding_cached_admins');
       if (rawAdmins) {
         const parsedAdmins = JSON.parse(rawAdmins);
-        if (Array.isArray(parsedAdmins)) cachedAdmins = parsedAdmins;
+        if (Array.isArray(parsedAdmins)) {
+          cachedAdmins = parsedAdmins.filter((a) => a && a._locallyModified === true);
+        }
       }
     } catch {
       // ignore
     }
 
-    const cachedGuests = loadCachedGuests();
-    const cachedWishes = loadCachedWishes();
+    const cachedGuests = loadCachedGuests().filter((g) => Boolean((g as any)._locallyModified));
+    const cachedWishes = loadCachedWishes().filter((w) => Boolean((w as any)._locallyModified));
     const deletedGuestIds = Array.from(getDeletedIds(DELETED_GUESTS_KEY));
     const deletedWishIds = Array.from(getDeletedIds(DELETED_WISHES_KEY));
 
-    await fetch('/api/public/sync-state', {
+    const hasPendingChanges =
+      settingsList.length > 0 ||
+      cachedGuests.length > 0 ||
+      cachedWishes.length > 0 ||
+      cachedAdmins.length > 0 ||
+      deletedGuestIds.length > 0 ||
+      deletedWishIds.length > 0;
+
+    if (!hasPendingChanges) {
+      return;
+    }
+
+    const res = await fetch('/api/public/sync-state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -421,6 +430,22 @@ async function pushLocalCacheToServer(): Promise<void> {
         deletedWishIds,
       }),
     });
+
+    if (res.ok) {
+      // Clear _locallyModified flags so stale localStorage never overwrites future database updates
+      for (const key of syncedSettingsKeys) {
+        try {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            delete parsed._locallyModified;
+            localStorage.setItem(key, JSON.stringify(parsed));
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
   } catch {
     // ignore background sync error
   }
@@ -772,6 +797,16 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           galleries: mergedGalleries
         };
         saveCachedGalleries(effectiveSlugKey, mergedGalleries);
+        try {
+          const cleanToCache = { ...resolvedSettings };
+          delete (cleanToCache as any)._locallyModified;
+          localStorage.setItem(`wedding_settings_cache_${effectiveSlugKey}`, JSON.stringify(cleanToCache));
+          if (slugKey === 'default') {
+            localStorage.setItem(`wedding_settings_cache_default`, JSON.stringify(cleanToCache));
+          }
+        } catch {
+          // ignore
+        }
         setSettings(resolvedSettings);
         settingsRef.current = resolvedSettings;
 
@@ -779,12 +814,14 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const serverWishes: Wish[] = Array.isArray(data.wishes) ? data.wishes : [];
         const cachedWishes = loadCachedWishes();
         const wishMap = new Map<string, Wish>();
-        for (const cw of cachedWishes) {
-          if (cw && cw.id && !deletedWishes.has(cw.id)) wishMap.set(cw.id, cw);
-        }
         for (const sw of serverWishes) {
           if (sw && sw.id && !deletedWishes.has(sw.id)) {
-            wishMap.set(sw.id, { ...(wishMap.get(sw.id) || {}), ...sw });
+            wishMap.set(sw.id, sw);
+          }
+        }
+        for (const cw of cachedWishes) {
+          if (cw && cw.id && !deletedWishes.has(cw.id) && (cw as any)._locallyModified && !wishMap.has(cw.id)) {
+            wishMap.set(cw.id, cw);
           }
         }
         const mergedWishes = localizeWishesList(Array.from(wishMap.values()), resolvedSettings, weddingSlug);
@@ -1082,7 +1119,16 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     connectWebSocket();
 
+    // Periodic background sync so edits on Computer automatically appear on HP within seconds
+    const syncInterval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        refreshData();
+        fetchGuests();
+      }
+    }, 6000);
+
     return () => {
+      clearInterval(syncInterval);
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
