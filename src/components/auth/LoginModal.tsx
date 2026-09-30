@@ -1,6 +1,4 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { LoginModal } from './LoginModal'
-import React, { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import {
   ArrowRight,
@@ -34,25 +32,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const resetForm = useCallback(() => {
-  setEmail('')
-  setPassword('')
-  setShowPassword(false)
-  setLoading(false)
-  setErrorMsg(null)
-}, [])
-
-useEffect(() => {
-  // Bersihkan kolom setiap kali modal dibuka atau ditutup.
-  resetForm()
-}, [isOpen, resetForm])
+    setEmail('')
+    setPassword('')
+    setShowPassword(false)
+    setLoading(false)
+    setErrorMsg(null)
+  }, [])
 
   useEffect(() => {
-    if (isOpen) {
-      resetForm()
-    }
-    // Reset hanya saat modal dibuka.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen])
+    // Kosongkan form saat modal dibuka maupun ditutup.
+    resetForm()
+  }, [isOpen, resetForm])
 
   const handleClose = () => {
     resetForm()
@@ -166,6 +156,7 @@ useEffect(() => {
                     aria-hidden="true"
                     className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400"
                   />
+
                   <input
                     id="manager-email"
                     name="email"
@@ -196,6 +187,7 @@ useEffect(() => {
                     aria-hidden="true"
                     className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400"
                   />
+
                   <input
                     id="manager-password"
                     name="password"
