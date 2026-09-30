@@ -671,7 +671,8 @@ function calculateStats(): DashboardStats {
 // ---------------- PUBLIC API ROUTES ----------------
 
 // Get wedding invitation data for visitors
-app.get('/api/public/data', (req, res) => {
+app.get('/api/public/data', async (req, res) => {
+  ensureDatabaseSynced().catch(() => {});
   const requestedSlug = (req.query.slug as string) || (req.query.w as string);
   const guestSlug = req.query.guest as string | undefined;
   let personalizedGuest: Guest | null = null;
@@ -695,6 +696,130 @@ app.get('/api/public/data', (req, res) => {
       confirmedPax: guests.filter(g => g.rsvpStatus === 'attending').reduce((sum, g) => sum + (g.paxConfirmed || g.paxAllocated), 0),
       totalWishes: localizedWishes.filter(w => w.isApproved).length
     }
+  });
+});
+
+// Bidirectional client-to-server & database state synchronization
+// Ensures any data previously cached in Computer localStorage is pushed to Server, PostgreSQL & Supabase so Phone (HP) can open it immediately
+app.post('/api/public/sync-state', (req, res) => {
+  ensureDatabaseSynced().catch(() => {});
+  const {
+    settingsList,
+    guests: incomingGuests,
+    wishes: incomingWishes,
+    admins: incomingAdmins,
+    deletedGuestIds,
+    deletedWishIds,
+  } = req.body || {};
+
+  const deletedGuestsSet = new Set<string>(Array.isArray(deletedGuestIds) ? deletedGuestIds.map(String) : []);
+  const deletedWishesSet = new Set<string>(Array.isArray(deletedWishIds) ? deletedWishIds.map(String) : []);
+
+  if (deletedGuestsSet.size > 0) {
+    guests = guests.filter(g => !deletedGuestsSet.has(g.id));
+    for (const delId of deletedGuestsSet) {
+      dbRepo.deleteGuest(delId).catch(() => {});
+    }
+  }
+
+  if (deletedWishesSet.size > 0) {
+    wishes = wishes.filter(w => !deletedWishesSet.has(w.id));
+    for (const delId of deletedWishesSet) {
+      dbRepo.deleteWish(delId).catch(() => {});
+    }
+  }
+
+  // Sync guests from client if they are new or updated
+  if (Array.isArray(incomingGuests)) {
+    for (const cg of incomingGuests) {
+      if (!cg || !cg.id || !cg.name || deletedGuestsSet.has(cg.id)) continue;
+      const idx = guests.findIndex(g => g.id === cg.id);
+      if (idx === -1) {
+        guests.unshift(cg);
+        dbRepo.upsertGuest(cg).catch(() => {});
+      } else {
+        const existing = guests[idx];
+        const isDefaultUnchanged =
+          ['g-1', 'g-2', 'g-3', 'g-4', 'g-5', 'g-6'].includes(cg.id) &&
+          cg.name === existing.name &&
+          cg.rsvpStatus === existing.rsvpStatus &&
+          cg.checkedIn === existing.checkedIn;
+        if (!isDefaultUnchanged) {
+          guests[idx] = { ...existing, ...cg };
+          dbRepo.upsertGuest(guests[idx]).catch(() => {});
+        }
+      }
+    }
+  }
+
+  // Sync wishes from client
+  if (Array.isArray(incomingWishes)) {
+    for (const cw of incomingWishes) {
+      if (!cw || !cw.id || !cw.senderName || !cw.message || deletedWishesSet.has(cw.id)) continue;
+      const idx = wishes.findIndex(w => w.id === cw.id);
+      if (idx === -1) {
+        wishes.unshift(cw);
+        dbRepo.upsertWish(cw).catch(() => {});
+      }
+    }
+  }
+
+  // Sync admins from client
+  if (Array.isArray(incomingAdmins)) {
+    for (const ca of incomingAdmins) {
+      if (!ca || !ca.id || !ca.username) continue;
+      const idx = adminUsers.findIndex(
+        u => u.id === ca.id || (u.username && u.username.toLowerCase() === String(ca.username).toLowerCase())
+      );
+      if (idx === -1) {
+        adminUsers.push(ca);
+        dbRepo.createDbUser({
+          uid: ca.id,
+          username: ca.username,
+          password: ca.password,
+          email: ca.email || `${ca.username}@wedding.local`,
+          name: ca.name,
+          role: ca.role,
+          weddingSlug: ca.weddingSlug,
+          coupleNames: ca.coupleNames,
+          phone: ca.phone,
+          notes: ca.notes,
+          active: ca.active !== false,
+          createdBy: ca.createdBy,
+          createdByName: ca.createdByName
+        }).catch(() => {});
+      }
+    }
+  }
+
+  // Sync wedding settings & galleries from client only when explicitly modified by user
+  if (Array.isArray(settingsList)) {
+    for (const item of settingsList) {
+      if (!item || !item.settings || !item.isLocallyModified) continue;
+      const s: WeddingSettings = item.settings;
+      const slugKey = sanitizeSlug(s.slug || item.slug || 'main') || 'main';
+      weddingsMap.set(slugKey, s);
+      dbRepo.saveSettings(s, slugKey).catch(() => {});
+      if (item.isMain || slugKey === weddingSettings.slug || weddingSettings.slug === 'rizky_dan_siti') {
+        weddingSettings = s;
+        dbRepo.saveSettings(s, 'main').catch(() => {});
+      }
+      if (Array.isArray(s.galleries)) {
+        for (const gal of s.galleries) {
+          if (gal && gal.id && gal.url) {
+            dbRepo.upsertGallery(gal).catch(() => {});
+          }
+        }
+      }
+    }
+  }
+
+  res.json({
+    success: true,
+    settings: weddingSettings,
+    guests,
+    wishes,
+    admins: adminUsers
   });
 });
 
@@ -1149,7 +1274,8 @@ app.post('/api/admin/change-password', (req, res) => {
 // ---------------- ADMIN & SUPER ADMIN ROUTES ----------------
 
 // Fetch full admin data
-app.get('/api/admin/data', (req, res) => {
+app.get('/api/admin/data', async (req, res) => {
+  await ensureDatabaseSynced();
   const requestedSlug = (req.query.slug as string) || (req.query.w as string);
   const activeSettings = getWedding(requestedSlug);
 
@@ -1181,7 +1307,8 @@ app.get('/api/admin/data', (req, res) => {
 });
 
 // Get all guests
-app.get('/api/admin/guests', (req, res) => {
+app.get('/api/admin/guests', async (req, res) => {
+  await ensureDatabaseSynced();
   res.json(guests);
 });
 
@@ -1564,7 +1691,8 @@ app.get('/api/admin/export/guests', (req, res) => {
 // ---------------- GALLERY MANAGEMENT API ROUTES ----------------
 
 // Get all galleries (public)
-app.get('/api/public/gallery', (req, res) => {
+app.get('/api/public/gallery', async (req, res) => {
+  await ensureDatabaseSynced();
   const slug = (req.query.slug as string) || undefined;
   const activeSettings = getWedding(slug);
   res.json({
@@ -1574,7 +1702,8 @@ app.get('/api/public/gallery', (req, res) => {
 });
 
 // Admin add new photo to gallery
-app.post('/api/admin/gallery', (req, res) => {
+app.post('/api/admin/gallery', async (req, res) => {
+  await ensureDatabaseSynced();
   const { id: requestedId, url, caption, category, isFeatured, slug } = req.body;
   if (!url) {
     return res.status(400).json({ error: 'Foto atau URL gambar wajib diisi.' });
@@ -1606,8 +1735,10 @@ app.post('/api/admin/gallery', (req, res) => {
   }
 
   weddingsMap.set(targetSlug, activeSettings);
-  dbRepo.upsertGallery(newPhoto).catch(err => console.error('DB Gallery add error:', err));
-  dbRepo.saveSettings(activeSettings, targetSlug).catch(err => console.error('DB Settings save error:', err));
+  weddingSettings.galleries = activeSettings.galleries;
+  await dbRepo.upsertGallery(newPhoto);
+  await dbRepo.saveSettings(activeSettings, targetSlug);
+  await dbRepo.saveSettings(weddingSettings, 'main');
 
   broadcast({
     type: 'GALLERY_UPDATED',
@@ -1623,7 +1754,8 @@ app.post('/api/admin/gallery', (req, res) => {
 });
 
 // Admin update photo details
-app.put('/api/admin/gallery/:id', (req, res) => {
+app.put('/api/admin/gallery/:id', async (req, res) => {
+  await ensureDatabaseSynced();
   const { caption, category, isFeatured, url, slug } = req.body;
   const activeSettings = getWedding(slug);
   const targetSlug = activeSettings.slug || (slug ? sanitizeSlug(slug) : 'default');
@@ -1651,8 +1783,10 @@ app.put('/api/admin/gallery/:id', (req, res) => {
   }
 
   weddingsMap.set(targetSlug, activeSettings);
-  dbRepo.upsertGallery(photo).catch(err => console.error('DB Gallery update error:', err));
-  dbRepo.saveSettings(activeSettings, targetSlug).catch(err => console.error('DB Settings save error:', err));
+  weddingSettings.galleries = activeSettings.galleries;
+  await dbRepo.upsertGallery(photo);
+  await dbRepo.saveSettings(activeSettings, targetSlug);
+  await dbRepo.saveSettings(weddingSettings, 'main');
 
   broadcast({
     type: 'GALLERY_UPDATED',
@@ -1668,7 +1802,8 @@ app.put('/api/admin/gallery/:id', (req, res) => {
 });
 
 // Admin delete photo
-app.delete('/api/admin/gallery/:id', (req, res) => {
+app.delete('/api/admin/gallery/:id', async (req, res) => {
+  await ensureDatabaseSynced();
   const slug = (req.query.slug as string) || (req.body && req.body.slug);
   const activeSettings = getWedding(slug);
   const targetSlug = activeSettings.slug || (slug ? sanitizeSlug(slug) : 'default');
@@ -1680,8 +1815,10 @@ app.delete('/api/admin/gallery/:id', (req, res) => {
   }
 
   weddingsMap.set(targetSlug, activeSettings);
-  dbRepo.deleteGallery(req.params.id).catch(err => console.error('DB Gallery delete error:', err));
-  dbRepo.saveSettings(activeSettings, targetSlug).catch(err => console.error('DB Settings save error:', err));
+  weddingSettings.galleries = activeSettings.galleries;
+  await dbRepo.deleteGallery(req.params.id);
+  await dbRepo.saveSettings(activeSettings, targetSlug);
+  await dbRepo.saveSettings(weddingSettings, 'main');
 
   broadcast({
     type: 'GALLERY_UPDATED',
@@ -1707,7 +1844,8 @@ app.get('/api/config/maps', (req, res) => {
 // ---------------- SUPER ADMIN EXCLUSIVE ROUTES ----------------
 
 // Update Wedding Settings
-app.put('/api/superadmin/settings', (req, res) => {
+app.put('/api/superadmin/settings', async (req, res) => {
+  await ensureDatabaseSynced();
   const newSettings = req.body;
   const groomNick = newSettings.groom?.nickname || newSettings.groom?.fullName || '';
   const brideNick = newSettings.bride?.nickname || newSettings.bride?.fullName || '';
@@ -1755,12 +1893,11 @@ app.put('/api/superadmin/settings', (req, res) => {
     }
   }
 
-  // If this is default or main, also sync default weddingSettings
-  if (targetSlug === weddingSettings.slug || targetSlug === 'default' || targetSlug === 'main') {
-    weddingSettings = updated;
-  }
+  // Always update default/main weddingSettings as well so opening root URL "/" on any device (HP/Phone) reflects the latest saved settings
+  weddingSettings = updated;
 
-  dbRepo.saveSettings(updated, targetSlug).catch(err => console.error('DB Settings update error:', err));
+  await dbRepo.saveSettings(updated, targetSlug);
+  await dbRepo.saveSettings(updated, 'main');
 
   broadcast({
     type: 'SETTINGS_UPDATED',
@@ -1808,7 +1945,8 @@ app.post('/api/superadmin/broadcast', (req, res) => {
 });
 
 // Super Admin & Owner: List admins / users
-app.get(['/api/superadmin/users', '/api/superadmin/admins'], (req, res) => {
+app.get(['/api/superadmin/users', '/api/superadmin/admins'], async (req, res) => {
+  await ensureDatabaseSynced();
   const authHeader = req.headers.authorization || '';
   const queryUserId = String(req.query.userId || '').trim().toLowerCase();
   const queryUsername = String(req.query.username || '').trim().toLowerCase();

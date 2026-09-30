@@ -24,7 +24,16 @@ function isValidSupabaseUrl(url: string): boolean {
   }
 }
 
-function isValidSupabaseKey(key: string): boolean {
+function extractProjectRefFromUrl(url: string): string {
+  try {
+    const host = new URL(url).hostname;
+    return host.split('.')[0] || '';
+  } catch {
+    return '';
+  }
+}
+
+function doesKeyMatchUrl(key: string, url: string): boolean {
   if (!key || key.length < 20) return false;
   const lower = key.toLowerCase();
   if (
@@ -36,8 +45,34 @@ function isValidSupabaseKey(key: string): boolean {
   ) {
     return false;
   }
-  // Standard Supabase anon/service_role JWTs start with "eyJ", new keys start with "sb_"
-  return key.startsWith('eyJ') || key.startsWith('sb_');
+
+  if (key.startsWith('sb_')) {
+    return true;
+  }
+
+  if (key.startsWith('eyJ')) {
+    const urlRef = extractProjectRefFromUrl(url);
+    if (!urlRef) return true;
+    try {
+      const parts = key.split('.');
+      if (parts.length >= 2) {
+        const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const jsonStr =
+          typeof atob === 'function'
+            ? atob(base64)
+            : Buffer.from(base64, 'base64').toString('utf8');
+        const payload = JSON.parse(jsonStr);
+        if (payload?.ref && typeof payload.ref === 'string') {
+          return payload.ref === urlRef;
+        }
+      }
+    } catch {
+      // If decoding fails, still allow key
+    }
+    return true;
+  }
+
+  return false;
 }
 
 const candidateUrls: string[] = [
@@ -46,30 +81,45 @@ const candidateUrls: string[] = [
   typeof process !== 'undefined' ? cleanEnvValue(process.env?.SUPABASE_URL) : '',
 ];
 
+export const supabaseUrl: string = candidateUrls.find(isValidSupabaseUrl) || '';
+
 const candidateKeys: string[] = [
-  typeof import.meta !== 'undefined' ? cleanEnvValue(import.meta.env?.VITE_SUPABASE_ANON_KEY) : '',
   typeof import.meta !== 'undefined' ? cleanEnvValue(import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY) : '',
-  typeof process !== 'undefined' ? cleanEnvValue(process.env?.VITE_SUPABASE_ANON_KEY) : '',
+  typeof import.meta !== 'undefined' ? cleanEnvValue(import.meta.env?.VITE_SUPABASE_ANON_KEY) : '',
   typeof process !== 'undefined' ? cleanEnvValue(process.env?.VITE_SUPABASE_PUBLISHABLE_KEY) : '',
+  typeof process !== 'undefined' ? cleanEnvValue(process.env?.VITE_SUPABASE_ANON_KEY) : '',
   typeof process !== 'undefined' ? cleanEnvValue(process.env?.SUPABASE_ANON_KEY) : '',
   typeof process !== 'undefined' ? cleanEnvValue(process.env?.SUPABASE_SERVICE_ROLE_KEY) : '',
 ];
 
-export const supabaseUrl: string = candidateUrls.find(isValidSupabaseUrl) || '';
-const resolvedKey: string = candidateKeys.find(isValidSupabaseKey) || '';
+const resolvedKey: string =
+  candidateKeys.find((k) => doesKeyMatchUrl(k, supabaseUrl)) || '';
 
-let runtimeKeyInvalidReason: string | null = null;
+let runtimeSupabaseNotice: string | null = null;
+let runtimeKeyInvalid: boolean = false;
 
 export function markSupabaseKeyInvalid(reason?: string) {
-  runtimeKeyInvalidReason = reason || 'API Key Supabase tidak valid';
+  const msg = String(reason || '');
+  runtimeSupabaseNotice = msg || 'API Key Supabase tidak valid';
+  if (
+    msg.toLowerCase().includes('invalid api key') ||
+    msg.toLowerCase().includes('jwt')
+  ) {
+    runtimeKeyInvalid = true;
+  }
+}
+
+export function clearSupabaseKeyError() {
+  runtimeSupabaseNotice = null;
+  runtimeKeyInvalid = false;
 }
 
 export function getSupabaseKeyError(): string | null {
-  return runtimeKeyInvalidReason;
+  return runtimeSupabaseNotice;
 }
 
 export function isSupabaseReady(): boolean {
-  return Boolean(supabaseUrl && resolvedKey && !runtimeKeyInvalidReason);
+  return Boolean(supabaseUrl && resolvedKey && !runtimeKeyInvalid);
 }
 
 export const isSupabaseConfigured: boolean = Boolean(supabaseUrl && resolvedKey);

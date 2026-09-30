@@ -107,7 +107,18 @@ CREATE TABLE IF NOT EXISTS public.gallery_photos (
   uploaded_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Aktifkan Row Level Security (RLS) & Kebijakan Akses API Aplikasi
+-- 6. WAJIB: Berikan Hak Akses Tabel & Sequence ke Role API Supabase (anon & authenticated)
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON TABLE public.wedding_settings TO anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON TABLE public.users TO anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON TABLE public.guests TO anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON TABLE public.wishes TO anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON TABLE public.gallery_photos TO anon, authenticated, service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+
+-- 7. Aktifkan Row Level Security (RLS) & Kebijakan Akses API Aplikasi
 ALTER TABLE public.wedding_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.guests ENABLE ROW LEVEL SECURITY;
@@ -117,19 +128,19 @@ ALTER TABLE public.gallery_photos ENABLE ROW LEVEL SECURITY;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'wedding_settings' AND policyname = 'Allow full access wedding_settings') THEN
-    CREATE POLICY "Allow full access wedding_settings" ON public.wedding_settings FOR ALL USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow full access wedding_settings" ON public.wedding_settings FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'users' AND policyname = 'Allow full access users') THEN
-    CREATE POLICY "Allow full access users" ON public.users FOR ALL USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow full access users" ON public.users FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'guests' AND policyname = 'Allow full access guests') THEN
-    CREATE POLICY "Allow full access guests" ON public.guests FOR ALL USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow full access guests" ON public.guests FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'wishes' AND policyname = 'Allow full access wishes') THEN
-    CREATE POLICY "Allow full access wishes" ON public.wishes FOR ALL USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow full access wishes" ON public.wishes FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'gallery_photos' AND policyname = 'Allow full access gallery_photos') THEN
-    CREATE POLICY "Allow full access gallery_photos" ON public.gallery_photos FOR ALL USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow full access gallery_photos" ON public.gallery_photos FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
   END IF;
 END $$;`;
 

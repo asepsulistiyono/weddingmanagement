@@ -247,19 +247,19 @@ function mergeServerAndLocalGuests(serverList: Guest[], localList: Guest[]): Gue
   const deleted = getDeletedIds(DELETED_GUESTS_KEY);
   const byId = new Map<string, Guest>();
 
-  // First put local cached guests (which have the user's immediate edits/creations)
+  // First put local cached guests (so any unsynced guest created offline isn't lost)
   for (const g of localList) {
     if (g && g.id && !deleted.has(g.id)) {
       byId.set(g.id, g);
     }
   }
 
-  // Merge server guests (local cache takes precedence for fields edited locally if same id, or add server guests not in local)
+  // Server guests are authoritative so edits from Computer immediately appear on Phone (HP)
   for (const sg of serverList) {
     if (!sg || !sg.id || deleted.has(sg.id)) continue;
     const existingLocal = byId.get(sg.id);
     if (existingLocal) {
-      byId.set(sg.id, { ...sg, ...existingLocal });
+      byId.set(sg.id, { ...existingLocal, ...sg });
     } else {
       byId.set(sg.id, sg);
     }
@@ -351,23 +351,79 @@ function mergeServerAndLocalGalleries(
   const cached = localGalleries && localGalleries.length > 0 ? localGalleries : loadCachedGalleries(slugKey);
   const byId = new Map<string, GalleryPhoto>();
 
+  for (const sp of serverGalleries) {
+    if (!sp || !sp.id || deleted.has(sp.id)) continue;
+    byId.set(sp.id, sp);
+  }
+
   for (const p of cached) {
-    if (p && p.id && !deleted.has(p.id)) {
+    if (p && p.id && !deleted.has(p.id) && !byId.has(p.id)) {
       byId.set(p.id, p);
     }
   }
 
-  for (const sp of serverGalleries) {
-    if (!sp || !sp.id || deleted.has(sp.id)) continue;
-    const existingLocal = byId.get(sp.id);
-    if (existingLocal) {
-      byId.set(sp.id, { ...sp, ...existingLocal });
-    } else {
-      byId.set(sp.id, sp);
-    }
-  }
-
   return Array.from(byId.values());
+}
+
+async function pushLocalCacheToServer(): Promise<void> {
+  try {
+    const settingsList: Array<{ slug: string; settings: WeddingSettings; isLocallyModified: boolean; isMain: boolean }> = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('wedding_settings_cache_')) {
+        const slug = key.replace('wedding_settings_cache_', '');
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        try {
+          const parsed = JSON.parse(raw) as WeddingSettings & { _locallyModified?: boolean };
+          const isModified =
+            Boolean(parsed._locallyModified) ||
+            (parsed.coupleNames && parsed.coupleNames !== 'Rizky & Siti');
+          if (parsed && isModified) {
+            settingsList.push({
+              slug,
+              settings: parsed,
+              isLocallyModified: true,
+              isMain: slug === 'default' || slug === 'main' || !window.location.hash,
+            });
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    let cachedAdmins: any[] = [];
+    try {
+      const rawAdmins = localStorage.getItem('wedding_cached_admins');
+      if (rawAdmins) {
+        const parsedAdmins = JSON.parse(rawAdmins);
+        if (Array.isArray(parsedAdmins)) cachedAdmins = parsedAdmins;
+      }
+    } catch {
+      // ignore
+    }
+
+    const cachedGuests = loadCachedGuests();
+    const cachedWishes = loadCachedWishes();
+    const deletedGuestIds = Array.from(getDeletedIds(DELETED_GUESTS_KEY));
+    const deletedWishIds = Array.from(getDeletedIds(DELETED_WISHES_KEY));
+
+    await fetch('/api/public/sync-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        settingsList,
+        guests: cachedGuests,
+        wishes: cachedWishes,
+        admins: cachedAdmins,
+        deletedGuestIds,
+        deletedWishIds,
+      }),
+    });
+  } catch {
+    // ignore background sync error
+  }
 }
 
 function resolveActiveWeddingSlug(): { weddingSlug: string | null; guestSlug: string | null } {
@@ -576,11 +632,12 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const updateSettingsDirectly = useCallback((newSettings: WeddingSettings) => {
     const slugKey = newSettings.slug || resolveActiveWeddingSlug().weddingSlug || 'default';
     const mergedGalleries = Array.isArray(newSettings.galleries)
-      ? mergeServerAndLocalGalleries(slugKey, [], newSettings.galleries)
+      ? mergeServerAndLocalGalleries(slugKey, newSettings.galleries, [])
       : loadCachedGalleries(slugKey);
-    const finalSettings: WeddingSettings = {
+    const finalSettings: WeddingSettings & { _locallyModified?: boolean } = {
       ...newSettings,
-      galleries: mergedGalleries
+      galleries: mergedGalleries,
+      _locallyModified: true
     };
     setSettings(finalSettings);
     settingsRef.current = finalSettings;
@@ -590,12 +647,14 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     saveCachedGalleries(slugKey, mergedGalleries);
     try {
       localStorage.setItem(`wedding_settings_cache_${slugKey}`, JSON.stringify(finalSettings));
+      localStorage.setItem(`wedding_settings_cache_default`, JSON.stringify(finalSettings));
       if (finalSettings.slug) {
         sessionStorage.setItem('wedding_active_slug', finalSettings.slug);
       }
     } catch {
       // ignore storage quota errors
     }
+    pushLocalCacheToServer();
   }, []);
 
   const upsertGalleryPhotoDirectly = useCallback((photo: GalleryPhoto, explicitSlug?: string) => {
@@ -617,7 +676,11 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     setSettings((prev) => {
       if (!prev) return prev;
-      const updated = { ...prev, galleries: nextGalleries };
+      const updated: WeddingSettings & { _locallyModified?: boolean } = {
+        ...prev,
+        galleries: nextGalleries,
+        _locallyModified: true
+      };
       settingsRef.current = updated;
       try {
         localStorage.setItem(`wedding_settings_cache_${slugKey}`, JSON.stringify(updated));
@@ -626,6 +689,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       return updated;
     });
+    pushLocalCacheToServer();
   }, []);
 
   const removeGalleryPhotoDirectly = useCallback((photoId: string, explicitSlug?: string) => {
@@ -643,7 +707,11 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     setSettings((prev) => {
       if (!prev) return prev;
-      const updated = { ...prev, galleries: nextGalleries };
+      const updated: WeddingSettings & { _locallyModified?: boolean } = {
+        ...prev,
+        galleries: nextGalleries,
+        _locallyModified: true
+      };
       settingsRef.current = updated;
       try {
         localStorage.setItem(`wedding_settings_cache_${slugKey}`, JSON.stringify(updated));
@@ -652,6 +720,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       return updated;
     });
+    pushLocalCacheToServer();
   }, []);
 
   const refreshData = useCallback(async () => {
@@ -671,11 +740,19 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const data = await res.json();
         let resolvedSettings: WeddingSettings = data.settings;
         const effectiveSlugKey = resolvedSettings?.slug || slugKey;
+
+        // Only apply localStorage settings override if THIS browser explicitly modified settings while server is still on default Rizky & Siti
         try {
-          const cachedRaw = localStorage.getItem(`wedding_settings_cache_${effectiveSlugKey}`) || localStorage.getItem(`wedding_settings_cache_${slugKey}`);
+          const cachedRaw =
+            localStorage.getItem(`wedding_settings_cache_${effectiveSlugKey}`) ||
+            localStorage.getItem(`wedding_settings_cache_${slugKey}`);
           if (cachedRaw) {
-            const cached = JSON.parse(cachedRaw) as WeddingSettings;
-            if (cached && (!cached.slug || cached.slug === slugKey || cached.slug === resolvedSettings?.slug)) {
+            const cached = JSON.parse(cachedRaw) as WeddingSettings & { _locallyModified?: boolean };
+            const serverIsStillDefault =
+              resolvedSettings?.coupleNames === 'Rizky & Siti' &&
+              cached?.coupleNames &&
+              cached.coupleNames !== 'Rizky & Siti';
+            if (cached && cached._locallyModified && serverIsStillDefault) {
               resolvedSettings = {
                 ...resolvedSettings,
                 ...cached,
@@ -707,7 +784,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
         for (const sw of serverWishes) {
           if (sw && sw.id && !deletedWishes.has(sw.id)) {
-            wishMap.set(sw.id, { ...sw, ...(wishMap.get(sw.id) || {}) });
+            wishMap.set(sw.id, { ...(wishMap.get(sw.id) || {}), ...sw });
           }
         }
         const mergedWishes = localizeWishesList(Array.from(wishMap.values()), resolvedSettings, weddingSlug);
@@ -734,8 +811,8 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
         return;
       }
-    } catch (err) {
-      console.error('Failed to fetch public wedding data:', err);
+    } catch {
+      // Transient fetch failure (e.g. during server restart); fall back to cache and retry silently
     }
 
     // Fallback to cached settings & guest if server is temporarily unreachable
@@ -828,6 +905,10 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     refreshData();
     fetchGuests();
+    pushLocalCacheToServer().then(() => {
+      refreshData();
+      fetchGuests();
+    });
 
     const connectWebSocket = () => {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -980,8 +1061,8 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               default:
                 break;
             }
-          } catch (e) {
-            console.error('Failed to parse WS message:', e);
+          } catch {
+            // ignore malformed WS message
           }
         };
 
@@ -991,12 +1072,10 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           reconnectTimeoutRef.current = window.setTimeout(connectWebSocket, 3000);
         };
 
-        ws.onerror = (err) => {
-          console.warn('WS error occurred:', err);
+        ws.onerror = () => {
           ws.close();
         };
-      } catch (err) {
-        console.error('Failed to init WS connection:', err);
+      } catch {
         reconnectTimeoutRef.current = window.setTimeout(connectWebSocket, 3000);
       }
     };
@@ -1065,8 +1144,8 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return next;
       });
       await fetch(`/api/public/wishes/${wishId}/react`, { method: 'POST' });
-    } catch (err) {
-      console.error('Failed to react to wish:', err);
+    } catch {
+      // ignore network error; optimistic update already applied
     }
   };
 

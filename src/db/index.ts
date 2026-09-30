@@ -6,6 +6,7 @@ import { isSupabaseReady, supabaseUrl, getSupabaseKeyError } from '../../supabas
 // Add global connection pool caching to persist across hot-reloads
 declare global {
   var _postgresPool: Pool | undefined;
+  var _postgresReady: boolean | undefined;
 }
 
 // Function to create or retrieve the connection pool using the Object Method
@@ -17,15 +18,19 @@ export const createPool = () => {
       password: process.env.SQL_PASSWORD,
       database: process.env.SQL_DB_NAME,
       max: 10,
-      connectionTimeoutMillis: 15000,
+      connectionTimeoutMillis: 3000,
     });
 
     // Prevent unhandled pool-level errors from crashing the application
-    global._postgresPool.on('error', (err) => {
-      console.error('Unexpected error on idle SQL pool client:', err);
+    global._postgresPool.on('error', () => {
+      global._postgresReady = false;
     });
   }
   return global._postgresPool;
+};
+
+export const isPostgresReady = (): boolean => {
+  return Boolean(global._postgresReady);
 };
 
 export const getActiveConnectionInfo = () => {
@@ -40,7 +45,7 @@ export const getActiveConnectionInfo = () => {
     return {
       isExternalSupabase: true,
       supabaseUrl,
-      keyError: null,
+      keyError: keyErr,
       host: parsedHost,
       database: 'postgres (Supabase External)',
       provider: `Supabase Cloud PostgreSQL (${parsedHost})`,
@@ -61,11 +66,19 @@ export const getActiveConnectionInfo = () => {
 // Create or retrieve the pool instance.
 const pool = createPool();
 
-pool.query("select 1")
-  .then(() => console.log("Koneksi PostgreSQL berhasil"))
-  .catch((err: Error & { code?: string }) => {
-    console.error("Koneksi PostgreSQL gagal:", err.code ?? err.message);
-  });
+if (process.env.SQL_HOST) {
+  pool
+    .query('select 1')
+    .then(() => {
+      global._postgresReady = true;
+      console.log('Koneksi PostgreSQL berhasil');
+    })
+    .catch(() => {
+      global._postgresReady = false;
+    });
+} else {
+  global._postgresReady = false;
+}
 
 // Initialize Drizzle with the pool and schema.
 export const db = drizzle(pool, { schema });

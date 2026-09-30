@@ -1,6 +1,11 @@
 import { eq, desc } from 'drizzle-orm';
-import { db } from './index.ts';
-import { supabase, isSupabaseReady, markSupabaseKeyInvalid } from '../../supabase.ts';
+import { db, isPostgresReady } from './index.ts';
+import {
+  supabase,
+  isSupabaseReady,
+  markSupabaseKeyInvalid,
+  clearSupabaseKeyError,
+} from '../../supabase.ts';
 import { 
   weddingSettingsTable, 
   guests, 
@@ -16,22 +21,45 @@ import type {
   AdminUser 
 } from '../types.ts';
 
+let supabaseBackoffUntil = 0;
+
+export function resetSupabaseBackoff() {
+  supabaseBackoffUntil = 0;
+}
+
+function canUseSupabase(): boolean {
+  return isSupabaseReady() && Date.now() >= supabaseBackoffUntil;
+}
+
 function handleSupabaseError(err: any) {
+  const code = String(err?.code || '');
   const msg = String(err?.message || err || '');
   const lower = msg.toLowerCase();
-  if (
+  if (code === '42501' || lower.includes('permission denied')) {
+    supabaseBackoffUntil = Date.now() + 8000;
+    markSupabaseKeyInvalid(
+      'Izin akses tabel Supabase (GRANT SELECT/INSERT/UPDATE/DELETE) untuk role anon belum aktif. Silakan klik "Salin Script SQL Supabase" di bawah lalu jalankan (Run) di SQL Editor Dashboard Supabase Anda.'
+    );
+  } else if (
     lower.includes('invalid api key') ||
     lower.includes('jwt') ||
     lower.includes('apikey')
   ) {
+    supabaseBackoffUntil = Date.now() + 15000;
     markSupabaseKeyInvalid(
-      'API Key Supabase tidak sesuai dengan Project URL. Pastikan VITE_SUPABASE_ANON_KEY atau VITE_SUPABASE_PUBLISHABLE_KEY disalin dari menu Project Settings > API pada proyek Supabase yang sama.'
+      'API Key Supabase tidak sesuai dengan Project URL. Pastikan VITE_SUPABASE_ANON_KEY atau VITE_SUPABASE_PUBLISHABLE_KEY cocok dengan VITE_SUPABASE_URL proyek Anda.'
+    );
+  } else if (code === '42P01' || lower.includes('does not exist')) {
+    supabaseBackoffUntil = Date.now() + 8000;
+    markSupabaseKeyInvalid(
+      'Tabel di proyek Supabase Anda belum dibuat. Silakan klik "Salin Script SQL Supabase" di bawah lalu jalankan (Run) di SQL Editor Dashboard Supabase Anda.'
     );
   }
 }
 
 export const SUPABASE_SCHEMA_SQL = `-- ============================================================================
--- SCRIPT SQL SUPABASE EKSTERNAL (Jalankan di SQL Editor Dashboard Supabase)
+-- SCRIPT SQL SUPABASE EKSTERNAL LENGKAP (5 Tabel + RLS + GRANT Hak Akses API)
+-- Jalankan seluruh script ini di menu SQL Editor pada Dashboard Supabase Anda
 -- ============================================================================
 
 -- 1. Tabel Pengaturan Undangan & Multi-Tenant Mempelai (wedding_settings)
@@ -100,7 +128,18 @@ CREATE TABLE IF NOT EXISTS public.gallery_photos (
   uploaded_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Aktifkan Row Level Security (RLS) & Kebijakan Akses API Aplikasi
+-- 6. WAJIB: Berikan Hak Akses Tabel & Sequence ke Role API Supabase (anon & authenticated)
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON TABLE public.wedding_settings TO anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON TABLE public.users TO anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON TABLE public.guests TO anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON TABLE public.wishes TO anon, authenticated, service_role;
+GRANT ALL PRIVILEGES ON TABLE public.gallery_photos TO anon, authenticated, service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+
+-- 7. Aktifkan Row Level Security (RLS) & Kebijakan Akses Penuh
 ALTER TABLE public.wedding_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.guests ENABLE ROW LEVEL SECURITY;
@@ -110,25 +149,26 @@ ALTER TABLE public.gallery_photos ENABLE ROW LEVEL SECURITY;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'wedding_settings' AND policyname = 'Allow full access wedding_settings') THEN
-    CREATE POLICY "Allow full access wedding_settings" ON public.wedding_settings FOR ALL USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow full access wedding_settings" ON public.wedding_settings FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'users' AND policyname = 'Allow full access users') THEN
-    CREATE POLICY "Allow full access users" ON public.users FOR ALL USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow full access users" ON public.users FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'guests' AND policyname = 'Allow full access guests') THEN
-    CREATE POLICY "Allow full access guests" ON public.guests FOR ALL USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow full access guests" ON public.guests FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'wishes' AND policyname = 'Allow full access wishes') THEN
-    CREATE POLICY "Allow full access wishes" ON public.wishes FOR ALL USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow full access wishes" ON public.wishes FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'gallery_photos' AND policyname = 'Allow full access gallery_photos') THEN
-    CREATE POLICY "Allow full access gallery_photos" ON public.gallery_photos FOR ALL USING (true) WITH CHECK (true);
+    CREATE POLICY "Allow full access gallery_photos" ON public.gallery_photos FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
   END IF;
 END $$;`;
 
 // ----------------- SETTINGS -----------------
 export async function getSettings(id: string = 'main'): Promise<WeddingSettings | null> {
-  if (isSupabaseReady()) {
+  let supaResult: WeddingSettings | null = null;
+  if (canUseSupabase()) {
     try {
       const { data, error } = await supabase
         .from('wedding_settings')
@@ -137,27 +177,33 @@ export async function getSettings(id: string = 'main'): Promise<WeddingSettings 
         .maybeSingle();
       if (error) {
         handleSupabaseError(error);
-      } else if (data?.data) {
-        return data.data as WeddingSettings;
+      } else {
+        clearSupabaseKeyError();
+        if (data?.data) {
+          supaResult = data.data as WeddingSettings;
+        }
       }
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    const records = await db.select().from(weddingSettingsTable).where(eq(weddingSettingsTable.id, id));
-    if (records.length > 0) {
-      return records[0].data as WeddingSettings;
+  if (isPostgresReady()) {
+    try {
+      const records = await db.select().from(weddingSettingsTable).where(eq(weddingSettingsTable.id, id));
+      if (records.length > 0) {
+        const pgData = records[0].data as WeddingSettings;
+        return supaResult ? { ...pgData, ...supaResult } : pgData;
+      }
+    } catch {
+      // ignore
     }
-    return null;
-  } catch {
-    return null;
   }
+  return supaResult;
 }
 
 export async function saveSettings(settings: WeddingSettings, id: string = 'main'): Promise<void> {
-  if (isSupabaseReady()) {
+  if (canUseSupabase()) {
     try {
       const { error } = await supabase
         .from('wedding_settings')
@@ -169,34 +215,52 @@ export async function saveSettings(settings: WeddingSettings, id: string = 'main
           },
           { onConflict: 'id' }
         );
-      if (!error) return;
-      handleSupabaseError(error);
+      if (error) {
+        handleSupabaseError(error);
+      } else {
+        clearSupabaseKeyError();
+      }
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    await db.insert(weddingSettingsTable)
-      .values({
-        id,
-        data: settings,
-        updatedAt: new Date()
-      })
-      .onConflictDoUpdate({
-        target: weddingSettingsTable.id,
-        set: {
+  if (isPostgresReady()) {
+    try {
+      await db.insert(weddingSettingsTable)
+        .values({
+          id,
           data: settings,
           updatedAt: new Date()
-        }
-      });
-  } catch {
-    // fallback handled in memory
+        })
+        .onConflictDoUpdate({
+          target: weddingSettingsTable.id,
+          set: {
+            data: settings,
+            updatedAt: new Date()
+          }
+        });
+    } catch {
+      // fallback handled in memory
+    }
   }
 }
 
 export async function getAllWeddings(): Promise<Array<{ id: string; data: WeddingSettings }>> {
-  if (isSupabaseReady()) {
+  const byId = new Map<string, WeddingSettings>();
+
+  if (isPostgresReady()) {
+    try {
+      const records = await db.select().from(weddingSettingsTable);
+      for (const r of records) {
+        byId.set(r.id, r.data as WeddingSettings);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (canUseSupabase()) {
     try {
       const { data, error } = await supabase
         .from('wedding_settings')
@@ -204,24 +268,50 @@ export async function getAllWeddings(): Promise<Array<{ id: string; data: Weddin
       if (error) {
         handleSupabaseError(error);
       } else if (Array.isArray(data)) {
-        return data.map(r => ({ id: String(r.id), data: r.data as WeddingSettings }));
+        clearSupabaseKeyError();
+        for (const r of data) {
+          byId.set(String(r.id), r.data as WeddingSettings);
+        }
       }
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    const records = await db.select().from(weddingSettingsTable);
-    return records.map(r => ({ id: r.id, data: r.data as WeddingSettings }));
-  } catch {
-    return [];
-  }
+  return Array.from(byId.entries()).map(([id, data]) => ({ id, data }));
 }
 
 // ----------------- GUESTS -----------------
 export async function getAllGuests(): Promise<Guest[]> {
-  if (isSupabaseReady()) {
+  const byId = new Map<string, Guest>();
+
+  if (isPostgresReady()) {
+    try {
+      const list = await db.select().from(guests).orderBy(desc(guests.createdAt));
+      for (const g of list) {
+        byId.set(g.id, {
+          id: g.id,
+          name: g.name,
+          slug: g.slug,
+          phone: g.phone || undefined,
+          category: g.category as Guest['category'],
+          paxAllocated: g.paxAllocated,
+          rsvpStatus: g.rsvpStatus as Guest['rsvpStatus'],
+          paxConfirmed: g.paxConfirmed,
+          checkedIn: g.checkedIn,
+          checkedInAt: g.checkedInAt || null,
+          notes: g.notes || undefined,
+          customGreeting: g.customGreeting || undefined,
+          invitationSent: g.invitationSent,
+          createdAt: g.createdAt ? g.createdAt.toISOString() : new Date().toISOString()
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (canUseSupabase()) {
     try {
       const { data, error } = await supabase
         .from('guests')
@@ -230,53 +320,38 @@ export async function getAllGuests(): Promise<Guest[]> {
       if (error) {
         handleSupabaseError(error);
       } else if (Array.isArray(data)) {
-        return data.map((g: any) => ({
-          id: g.id,
-          name: g.name,
-          slug: g.slug,
-          phone: g.phone || undefined,
-          category: (g.category || 'Sahabat') as Guest['category'],
-          paxAllocated: Number(g.pax_allocated ?? 1),
-          rsvpStatus: (g.rsvp_status || 'unconfirmed') as Guest['rsvpStatus'],
-          paxConfirmed: Number(g.pax_confirmed ?? 0),
-          checkedIn: Boolean(g.checked_in),
-          checkedInAt: g.checked_in_at || null,
-          notes: g.notes || undefined,
-          customGreeting: g.custom_greeting || undefined,
-          invitationSent: Boolean(g.invitation_sent),
-          createdAt: g.created_at ? new Date(g.created_at).toISOString() : new Date().toISOString()
-        }));
+        clearSupabaseKeyError();
+        for (const g of data as any[]) {
+          byId.set(g.id, {
+            id: g.id,
+            name: g.name,
+            slug: g.slug,
+            phone: g.phone || undefined,
+            category: (g.category || 'Sahabat') as Guest['category'],
+            paxAllocated: Number(g.pax_allocated ?? 1),
+            rsvpStatus: (g.rsvp_status || 'unconfirmed') as Guest['rsvpStatus'],
+            paxConfirmed: Number(g.pax_confirmed ?? 0),
+            checkedIn: Boolean(g.checked_in),
+            checkedInAt: g.checked_in_at || null,
+            notes: g.notes || undefined,
+            customGreeting: g.custom_greeting || undefined,
+            invitationSent: Boolean(g.invitation_sent),
+            createdAt: g.created_at ? new Date(g.created_at).toISOString() : new Date().toISOString()
+          });
+        }
       }
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    const list = await db.select().from(guests).orderBy(desc(guests.createdAt));
-    return list.map(g => ({
-      id: g.id,
-      name: g.name,
-      slug: g.slug,
-      phone: g.phone || undefined,
-      category: g.category as Guest['category'],
-      paxAllocated: g.paxAllocated,
-      rsvpStatus: g.rsvpStatus as Guest['rsvpStatus'],
-      paxConfirmed: g.paxConfirmed,
-      checkedIn: g.checkedIn,
-      checkedInAt: g.checkedInAt || null,
-      notes: g.notes || undefined,
-      customGreeting: g.customGreeting || undefined,
-      invitationSent: g.invitationSent,
-      createdAt: g.createdAt ? g.createdAt.toISOString() : new Date().toISOString()
-    }));
-  } catch {
-    return [];
-  }
+  const merged = Array.from(byId.values());
+  merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return merged;
 }
 
 export async function upsertGuest(guest: Guest): Promise<void> {
-  if (isSupabaseReady()) {
+  if (canUseSupabase()) {
     const buildPayload = (slugToUse: string) => ({
       id: guest.id,
       name: guest.name,
@@ -298,40 +373,26 @@ export async function upsertGuest(guest: Guest): Promise<void> {
       const { error } = await supabase
         .from('guests')
         .upsert(buildPayload(guest.slug), { onConflict: 'id' });
-      if (!error) return;
-      handleSupabaseError(error);
-      if (isSupabaseReady()) {
-        const { error: retryErr } = await supabase
-          .from('guests')
-          .upsert(buildPayload(`${guest.slug}-${guest.id.slice(-4)}`), { onConflict: 'id' });
-        if (!retryErr) return;
+      if (error) {
+        handleSupabaseError(error);
+        if (error.code === '23505') {
+          await supabase
+            .from('guests')
+            .upsert(buildPayload(`${guest.slug}-${guest.id.slice(-4)}`), { onConflict: 'id' });
+        }
+      } else {
+        clearSupabaseKeyError();
       }
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  const attemptUpsert = async (slugToUse: string) => {
-    await db.insert(guests)
-      .values({
-        id: guest.id,
-        name: guest.name,
-        slug: slugToUse,
-        phone: guest.phone || null,
-        category: guest.category,
-        paxAllocated: guest.paxAllocated,
-        rsvpStatus: guest.rsvpStatus,
-        paxConfirmed: guest.paxConfirmed,
-        checkedIn: guest.checkedIn,
-        checkedInAt: guest.checkedInAt || null,
-        notes: guest.notes || null,
-        customGreeting: guest.customGreeting || null,
-        invitationSent: guest.invitationSent,
-        createdAt: guest.createdAt ? new Date(guest.createdAt) : new Date()
-      })
-      .onConflictDoUpdate({
-        target: guests.id,
-        set: {
+  if (isPostgresReady()) {
+    const attemptUpsert = async (slugToUse: string) => {
+      await db.insert(guests)
+        .values({
+          id: guest.id,
           name: guest.name,
           slug: slugToUse,
           phone: guest.phone || null,
@@ -343,43 +404,86 @@ export async function upsertGuest(guest: Guest): Promise<void> {
           checkedInAt: guest.checkedInAt || null,
           notes: guest.notes || null,
           customGreeting: guest.customGreeting || null,
-          invitationSent: guest.invitationSent
-        }
-      });
-  };
+          invitationSent: guest.invitationSent,
+          createdAt: guest.createdAt ? new Date(guest.createdAt) : new Date()
+        })
+        .onConflictDoUpdate({
+          target: guests.id,
+          set: {
+            name: guest.name,
+            slug: slugToUse,
+            phone: guest.phone || null,
+            category: guest.category,
+            paxAllocated: guest.paxAllocated,
+            rsvpStatus: guest.rsvpStatus,
+            paxConfirmed: guest.paxConfirmed,
+            checkedIn: guest.checkedIn,
+            checkedInAt: guest.checkedInAt || null,
+            notes: guest.notes || null,
+            customGreeting: guest.customGreeting || null,
+            invitationSent: guest.invitationSent
+          }
+        });
+    };
 
-  try {
-    await attemptUpsert(guest.slug);
-  } catch {
     try {
-      await attemptUpsert(`${guest.slug}-${guest.id.slice(-4)}`);
+      await attemptUpsert(guest.slug);
+    } catch {
+      try {
+        await attemptUpsert(`${guest.slug}-${guest.id.slice(-4)}`);
+      } catch {
+        // fallback handled in memory
+      }
+    }
+  }
+}
+
+export async function deleteGuest(id: string): Promise<void> {
+  if (canUseSupabase()) {
+    try {
+      const { error } = await supabase.from('guests').delete().eq('id', id);
+      if (error) handleSupabaseError(error);
+    } catch (err) {
+      handleSupabaseError(err);
+    }
+  }
+
+  if (isPostgresReady()) {
+    try {
+      await db.delete(guests).where(eq(guests.id, id));
     } catch {
       // fallback handled in memory
     }
   }
 }
 
-export async function deleteGuest(id: string): Promise<void> {
-  if (isSupabaseReady()) {
+// ----------------- WISHES -----------------
+export async function getAllWishes(): Promise<Wish[]> {
+  const byId = new Map<string, Wish>();
+
+  if (isPostgresReady()) {
     try {
-      const { error } = await supabase.from('guests').delete().eq('id', id);
-      if (!error) return;
-      handleSupabaseError(error);
-    } catch (err) {
-      handleSupabaseError(err);
+      const list = await db.select().from(wishes).orderBy(desc(wishes.isPinned), desc(wishes.createdAt));
+      for (const w of list) {
+        byId.set(w.id, {
+          id: w.id,
+          senderName: w.name,
+          attendance: (w.attendance || 'attending') as Wish['attendance'],
+          message: w.message,
+          pax: 1,
+          isPinned: w.isPinned,
+          isApproved: w.isApproved,
+          reactionCount: 0,
+          adminReply: w.adminReply || undefined,
+          createdAt: w.createdAt ? w.createdAt.toISOString() : new Date().toISOString()
+        });
+      }
+    } catch {
+      // ignore
     }
   }
 
-  try {
-    await db.delete(guests).where(eq(guests.id, id));
-  } catch {
-    // fallback handled in memory
-  }
-}
-
-// ----------------- WISHES -----------------
-export async function getAllWishes(): Promise<Wish[]> {
-  if (isSupabaseReady()) {
+  if (canUseSupabase()) {
     try {
       const { data, error } = await supabase
         .from('wishes')
@@ -389,45 +493,32 @@ export async function getAllWishes(): Promise<Wish[]> {
       if (error) {
         handleSupabaseError(error);
       } else if (Array.isArray(data)) {
-        return data.map((w: any) => ({
-          id: w.id,
-          senderName: w.name,
-          attendance: (w.attendance || 'attending') as Wish['attendance'],
-          message: w.message,
-          pax: 1,
-          isPinned: Boolean(w.is_pinned),
-          isApproved: w.is_approved !== false,
-          reactionCount: 0,
-          adminReply: w.admin_reply || undefined,
-          createdAt: w.created_at ? new Date(w.created_at).toISOString() : new Date().toISOString()
-        }));
+        clearSupabaseKeyError();
+        for (const w of data as any[]) {
+          byId.set(w.id, {
+            id: w.id,
+            senderName: w.name,
+            attendance: (w.attendance || 'attending') as Wish['attendance'],
+            message: w.message,
+            pax: 1,
+            isPinned: Boolean(w.is_pinned),
+            isApproved: w.is_approved !== false,
+            reactionCount: 0,
+            adminReply: w.admin_reply || undefined,
+            createdAt: w.created_at ? new Date(w.created_at).toISOString() : new Date().toISOString()
+          });
+        }
       }
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    const list = await db.select().from(wishes).orderBy(desc(wishes.isPinned), desc(wishes.createdAt));
-    return list.map(w => ({
-      id: w.id,
-      senderName: w.name,
-      attendance: (w.attendance || 'attending') as Wish['attendance'],
-      message: w.message,
-      pax: 1,
-      isPinned: w.isPinned,
-      isApproved: w.isApproved,
-      reactionCount: 0,
-      adminReply: w.adminReply || undefined,
-      createdAt: w.createdAt ? w.createdAt.toISOString() : new Date().toISOString()
-    }));
-  } catch {
-    return [];
-  }
+  return Array.from(byId.values());
 }
 
 export async function upsertWish(wish: Wish): Promise<void> {
-  if (isSupabaseReady()) {
+  if (canUseSupabase()) {
     try {
       const { error } = await supabase
         .from('wishes')
@@ -444,62 +535,85 @@ export async function upsertWish(wish: Wish): Promise<void> {
           },
           { onConflict: 'id' }
         );
-      if (!error) return;
-      handleSupabaseError(error);
+      if (error) handleSupabaseError(error);
+      else clearSupabaseKeyError();
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    await db.insert(wishes)
-      .values({
-        id: wish.id,
-        name: wish.senderName,
-        attendance: wish.attendance,
-        message: wish.message,
-        isPinned: wish.isPinned,
-        isApproved: wish.isApproved,
-        adminReply: wish.adminReply || null,
-        createdAt: wish.createdAt ? new Date(wish.createdAt) : new Date()
-      })
-      .onConflictDoUpdate({
-        target: wishes.id,
-        set: {
+  if (isPostgresReady()) {
+    try {
+      await db.insert(wishes)
+        .values({
+          id: wish.id,
           name: wish.senderName,
           attendance: wish.attendance,
           message: wish.message,
           isPinned: wish.isPinned,
           isApproved: wish.isApproved,
-          adminReply: wish.adminReply || null
-        }
-      });
-  } catch {
-    // fallback handled in memory
+          adminReply: wish.adminReply || null,
+          createdAt: wish.createdAt ? new Date(wish.createdAt) : new Date()
+        })
+        .onConflictDoUpdate({
+          target: wishes.id,
+          set: {
+            name: wish.senderName,
+            attendance: wish.attendance,
+            message: wish.message,
+            isPinned: wish.isPinned,
+            isApproved: wish.isApproved,
+            adminReply: wish.adminReply || null
+          }
+        });
+    } catch {
+      // fallback handled in memory
+    }
   }
 }
 
 export async function deleteWish(id: string): Promise<void> {
-  if (isSupabaseReady()) {
+  if (canUseSupabase()) {
     try {
       const { error } = await supabase.from('wishes').delete().eq('id', id);
-      if (!error) return;
-      handleSupabaseError(error);
+      if (error) handleSupabaseError(error);
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    await db.delete(wishes).where(eq(wishes.id, id));
-  } catch {
-    // fallback handled in memory
+  if (isPostgresReady()) {
+    try {
+      await db.delete(wishes).where(eq(wishes.id, id));
+    } catch {
+      // fallback handled in memory
+    }
   }
 }
 
 // ----------------- GALLERIES -----------------
 export async function getAllGalleries(): Promise<GalleryPhoto[]> {
-  if (isSupabaseReady()) {
+  const byId = new Map<string, GalleryPhoto>();
+
+  if (isPostgresReady()) {
+    try {
+      const list = await db.select().from(galleryPhotos).orderBy(desc(galleryPhotos.uploadedAt));
+      for (const p of list) {
+        byId.set(p.id, {
+          id: p.id,
+          url: p.url,
+          caption: p.caption,
+          category: p.category,
+          isFeatured: p.isFeatured,
+          uploadedAt: p.uploadedAt ? p.uploadedAt.toISOString() : new Date().toISOString()
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (canUseSupabase()) {
     try {
       const { data, error } = await supabase
         .from('gallery_photos')
@@ -508,37 +622,28 @@ export async function getAllGalleries(): Promise<GalleryPhoto[]> {
       if (error) {
         handleSupabaseError(error);
       } else if (Array.isArray(data)) {
-        return data.map((p: any) => ({
-          id: p.id,
-          url: p.url,
-          caption: p.caption,
-          category: p.category || 'Prewedding',
-          isFeatured: Boolean(p.is_featured),
-          uploadedAt: p.uploaded_at ? new Date(p.uploaded_at).toISOString() : new Date().toISOString()
-        }));
+        clearSupabaseKeyError();
+        for (const p of data as any[]) {
+          byId.set(p.id, {
+            id: p.id,
+            url: p.url,
+            caption: p.caption,
+            category: p.category || 'Prewedding',
+            isFeatured: Boolean(p.is_featured),
+            uploadedAt: p.uploaded_at ? new Date(p.uploaded_at).toISOString() : new Date().toISOString()
+          });
+        }
       }
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    const list = await db.select().from(galleryPhotos).orderBy(desc(galleryPhotos.uploadedAt));
-    return list.map(p => ({
-      id: p.id,
-      url: p.url,
-      caption: p.caption,
-      category: p.category,
-      isFeatured: p.isFeatured,
-      uploadedAt: p.uploadedAt ? p.uploadedAt.toISOString() : new Date().toISOString()
-    }));
-  } catch {
-    return [];
-  }
+  return Array.from(byId.values());
 }
 
 export async function upsertGallery(photo: GalleryPhoto): Promise<void> {
-  if (isSupabaseReady()) {
+  if (canUseSupabase()) {
     try {
       const { error } = await supabase
         .from('gallery_photos')
@@ -553,58 +658,91 @@ export async function upsertGallery(photo: GalleryPhoto): Promise<void> {
           },
           { onConflict: 'id' }
         );
-      if (!error) return;
-      handleSupabaseError(error);
+      if (error) handleSupabaseError(error);
+      else clearSupabaseKeyError();
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    await db.insert(galleryPhotos)
-      .values({
-        id: photo.id,
-        url: photo.url,
-        caption: photo.caption,
-        category: photo.category,
-        isFeatured: photo.isFeatured,
-        uploadedAt: photo.uploadedAt ? new Date(photo.uploadedAt) : new Date()
-      })
-      .onConflictDoUpdate({
-        target: galleryPhotos.id,
-        set: {
+  if (isPostgresReady()) {
+    try {
+      await db.insert(galleryPhotos)
+        .values({
+          id: photo.id,
           url: photo.url,
           caption: photo.caption,
           category: photo.category,
-          isFeatured: photo.isFeatured
-        }
-      });
-  } catch {
-    // fallback handled in memory
+          isFeatured: photo.isFeatured,
+          uploadedAt: photo.uploadedAt ? new Date(photo.uploadedAt) : new Date()
+        })
+        .onConflictDoUpdate({
+          target: galleryPhotos.id,
+          set: {
+            url: photo.url,
+            caption: photo.caption,
+            category: photo.category,
+            isFeatured: photo.isFeatured
+          }
+        });
+    } catch {
+      // fallback handled in memory
+    }
   }
 }
 
 export async function deleteGallery(id: string): Promise<void> {
-  if (isSupabaseReady()) {
+  if (canUseSupabase()) {
     try {
       const { error } = await supabase.from('gallery_photos').delete().eq('id', id);
-      if (!error) return;
-      handleSupabaseError(error);
+      if (error) handleSupabaseError(error);
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    await db.delete(galleryPhotos).where(eq(galleryPhotos.id, id));
-  } catch {
-    // fallback handled in memory
+  if (isPostgresReady()) {
+    try {
+      await db.delete(galleryPhotos).where(eq(galleryPhotos.id, id));
+    } catch {
+      // fallback handled in memory
+    }
   }
 }
 
 // ----------------- USERS -----------------
 export async function getAllUsers(): Promise<Array<AdminUser & { password?: string }>> {
-  if (isSupabaseReady()) {
+  const byId = new Map<string, AdminUser & { password?: string }>();
+
+  if (isPostgresReady()) {
+    try {
+      const list = await db.select().from(users).orderBy(desc(users.createdAt));
+      for (const u of list) {
+        const id = u.uid || `user-${u.id}`;
+        byId.set(id, {
+          id,
+          username: u.username || u.email.split('@')[0],
+          password: u.password || undefined,
+          name: u.name || u.username || u.email.split('@')[0],
+          email: u.email,
+          role: (u.role as AdminUser['role']) || 'admin',
+          weddingSlug: u.weddingSlug || undefined,
+          coupleNames: u.coupleNames || undefined,
+          phone: u.phone || undefined,
+          notes: u.notes || undefined,
+          active: u.active !== false,
+          createdBy: u.createdBy || undefined,
+          createdByName: u.createdByName || undefined,
+          isOwner: u.email?.toLowerCase() === 'asepsulistiyono1@gmail.com' || u.username?.toLowerCase() === 'asepsulistiyono1',
+          createdAt: u.createdAt ? u.createdAt.toISOString() : new Date().toISOString()
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (canUseSupabase()) {
     try {
       const { data, error } = await supabase
         .from('users')
@@ -613,53 +751,36 @@ export async function getAllUsers(): Promise<Array<AdminUser & { password?: stri
       if (error) {
         handleSupabaseError(error);
       } else if (Array.isArray(data)) {
-        return data.map((u: any) => ({
-          id: u.uid || `user-${u.id}`,
-          username: u.username || (u.email ? String(u.email).split('@')[0] : 'admin'),
-          password: u.password || undefined,
-          name: u.name || u.username || (u.email ? String(u.email).split('@')[0] : 'Admin'),
-          email: u.email,
-          role: (u.role as AdminUser['role']) || 'admin',
-          weddingSlug: u.wedding_slug || undefined,
-          coupleNames: u.couple_names || undefined,
-          phone: u.phone || undefined,
-          notes: u.notes || undefined,
-          active: u.active !== false,
-          createdBy: u.created_by || undefined,
-          createdByName: u.created_by_name || undefined,
-          isOwner:
-            String(u.email || '').toLowerCase() === 'asepsulistiyono1@gmail.com' ||
-            String(u.username || '').toLowerCase() === 'asepsulistiyono1',
-          createdAt: u.created_at ? new Date(u.created_at).toISOString() : new Date().toISOString()
-        }));
+        clearSupabaseKeyError();
+        for (const u of data as any[]) {
+          const id = u.uid || `user-${u.id}`;
+          byId.set(id, {
+            id,
+            username: u.username || (u.email ? String(u.email).split('@')[0] : 'admin'),
+            password: u.password || undefined,
+            name: u.name || u.username || (u.email ? String(u.email).split('@')[0] : 'Admin'),
+            email: u.email,
+            role: (u.role as AdminUser['role']) || 'admin',
+            weddingSlug: u.wedding_slug || undefined,
+            coupleNames: u.couple_names || undefined,
+            phone: u.phone || undefined,
+            notes: u.notes || undefined,
+            active: u.active !== false,
+            createdBy: u.created_by || undefined,
+            createdByName: u.created_by_name || undefined,
+            isOwner:
+              String(u.email || '').toLowerCase() === 'asepsulistiyono1@gmail.com' ||
+              String(u.username || '').toLowerCase() === 'asepsulistiyono1',
+            createdAt: u.created_at ? new Date(u.created_at).toISOString() : new Date().toISOString()
+          });
+        }
       }
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    const list = await db.select().from(users).orderBy(desc(users.createdAt));
-    return list.map(u => ({
-      id: u.uid || `user-${u.id}`,
-      username: u.username || u.email.split('@')[0],
-      password: u.password || undefined,
-      name: u.name || u.username || u.email.split('@')[0],
-      email: u.email,
-      role: (u.role as AdminUser['role']) || 'admin',
-      weddingSlug: u.weddingSlug || undefined,
-      coupleNames: u.coupleNames || undefined,
-      phone: u.phone || undefined,
-      notes: u.notes || undefined,
-      active: u.active !== false,
-      createdBy: u.createdBy || undefined,
-      createdByName: u.createdByName || undefined,
-      isOwner: u.email?.toLowerCase() === 'asepsulistiyono1@gmail.com' || u.username?.toLowerCase() === 'asepsulistiyono1',
-      createdAt: u.createdAt ? u.createdAt.toISOString() : new Date().toISOString()
-    }));
-  } catch {
-    return [];
-  }
+  return Array.from(byId.values());
 }
 
 export async function createDbUser(user: {
@@ -677,7 +798,7 @@ export async function createDbUser(user: {
   createdBy?: string;
   createdByName?: string;
 }): Promise<void> {
-  if (isSupabaseReady()) {
+  if (canUseSupabase()) {
     try {
       const { error } = await supabase
         .from('users')
@@ -699,34 +820,18 @@ export async function createDbUser(user: {
           },
           { onConflict: 'uid' }
         );
-      if (!error) return;
-      handleSupabaseError(error);
+      if (error) handleSupabaseError(error);
+      else clearSupabaseKeyError();
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    await db.insert(users)
-      .values({
-        uid: user.uid,
-        username: user.username || user.email.split('@')[0],
-        password: user.password || null,
-        email: user.email,
-        name: user.name || user.username || user.email.split('@')[0],
-        role: user.role || 'admin',
-        weddingSlug: user.weddingSlug || null,
-        coupleNames: user.coupleNames || null,
-        phone: user.phone || null,
-        notes: user.notes || null,
-        active: user.active !== false,
-        createdBy: user.createdBy || null,
-        createdByName: user.createdByName || null,
-        createdAt: new Date()
-      })
-      .onConflictDoUpdate({
-        target: users.uid,
-        set: {
+  if (isPostgresReady()) {
+    try {
+      await db.insert(users)
+        .values({
+          uid: user.uid,
           username: user.username || user.email.split('@')[0],
           password: user.password || null,
           email: user.email,
@@ -738,29 +843,48 @@ export async function createDbUser(user: {
           notes: user.notes || null,
           active: user.active !== false,
           createdBy: user.createdBy || null,
-          createdByName: user.createdByName || null
-        }
-      });
-  } catch {
-    // fallback handled in memory
+          createdByName: user.createdByName || null,
+          createdAt: new Date()
+        })
+        .onConflictDoUpdate({
+          target: users.uid,
+          set: {
+            username: user.username || user.email.split('@')[0],
+            password: user.password || null,
+            email: user.email,
+            name: user.name || user.username || user.email.split('@')[0],
+            role: user.role || 'admin',
+            weddingSlug: user.weddingSlug || null,
+            coupleNames: user.coupleNames || null,
+            phone: user.phone || null,
+            notes: user.notes || null,
+            active: user.active !== false,
+            createdBy: user.createdBy || null,
+            createdByName: user.createdByName || null
+          }
+        });
+    } catch {
+      // fallback handled in memory
+    }
   }
 }
 
 export async function deleteDbUser(uid: string): Promise<void> {
-  if (isSupabaseReady()) {
+  if (canUseSupabase()) {
     try {
       const { error } = await supabase.from('users').delete().eq('uid', uid);
-      if (!error) return;
-      handleSupabaseError(error);
+      if (error) handleSupabaseError(error);
     } catch (err) {
       handleSupabaseError(err);
     }
   }
 
-  try {
-    await db.delete(users).where(eq(users.uid, uid));
-  } catch {
-    // fallback handled in memory
+  if (isPostgresReady()) {
+    try {
+      await db.delete(users).where(eq(users.uid, uid));
+    } catch {
+      // fallback handled in memory
+    }
   }
 }
 
@@ -771,14 +895,15 @@ export async function getTableCounts(): Promise<{
   gallery_photos: number;
   users: number;
 }> {
+  resetSupabaseBackoff();
   if (isSupabaseReady()) {
     try {
       const [settingsRes, guestsRes, wishesRes, galleryRes, usersRes] = await Promise.all([
-        supabase.from('wedding_settings').select('id', { count: 'exact', head: true }),
-        supabase.from('guests').select('id', { count: 'exact', head: true }),
-        supabase.from('wishes').select('id', { count: 'exact', head: true }),
-        supabase.from('gallery_photos').select('id', { count: 'exact', head: true }),
-        supabase.from('users').select('uid', { count: 'exact', head: true }),
+        supabase.from('wedding_settings').select('id'),
+        supabase.from('guests').select('id'),
+        supabase.from('wishes').select('id'),
+        supabase.from('gallery_photos').select('id'),
+        supabase.from('users').select('uid'),
       ]);
 
       const firstError =
@@ -789,12 +914,13 @@ export async function getTableCounts(): Promise<{
         usersRes.error;
 
       if (!firstError) {
+        clearSupabaseKeyError();
         return {
-          wedding_settings: settingsRes.count ?? 0,
-          guests: guestsRes.count ?? 0,
-          wishes: wishesRes.count ?? 0,
-          gallery_photos: galleryRes.count ?? 0,
-          users: usersRes.count ?? 0,
+          wedding_settings: settingsRes.data?.length ?? 0,
+          guests: guestsRes.data?.length ?? 0,
+          wishes: wishesRes.data?.length ?? 0,
+          gallery_photos: galleryRes.data?.length ?? 0,
+          users: usersRes.data?.length ?? 0,
         };
       }
       handleSupabaseError(firstError);
@@ -803,28 +929,32 @@ export async function getTableCounts(): Promise<{
     }
   }
 
-  try {
-    const [settingsRows, guestsRows, wishesRows, galleryRows, usersRows] = await Promise.all([
-      db.select().from(weddingSettingsTable),
-      db.select().from(guests),
-      db.select().from(wishes),
-      db.select().from(galleryPhotos),
-      db.select().from(users),
-    ]);
-    return {
-      wedding_settings: settingsRows.length,
-      guests: guestsRows.length,
-      wishes: wishesRows.length,
-      gallery_photos: galleryRows.length,
-      users: usersRows.length,
-    };
-  } catch {
-    return {
-      wedding_settings: 1,
-      guests: 0,
-      wishes: 0,
-      gallery_photos: 0,
-      users: 4,
-    };
+  if (isPostgresReady()) {
+    try {
+      const [settingsRows, guestsRows, wishesRows, galleryRows, usersRows] = await Promise.all([
+        db.select().from(weddingSettingsTable),
+        db.select().from(guests),
+        db.select().from(wishes),
+        db.select().from(galleryPhotos),
+        db.select().from(users),
+      ]);
+      return {
+        wedding_settings: settingsRows.length,
+        guests: guestsRows.length,
+        wishes: wishesRows.length,
+        gallery_photos: galleryRows.length,
+        users: usersRows.length,
+      };
+    } catch {
+      // ignore
+    }
   }
+
+  return {
+    wedding_settings: 1,
+    guests: 0,
+    wishes: 0,
+    gallery_photos: 0,
+    users: 4,
+  };
 }
