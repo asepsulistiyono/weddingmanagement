@@ -39,6 +39,12 @@ import {
 } from '../../context/AuthContext.tsx';
 import { generateWeddingSlug, sanitizeSlug, getFullInvitationUrl } from '../../utils/slugHelper.ts';
 import { useRealtime } from '../../context/RealtimeContext.tsx';
+import {
+  syncUserToSupabaseClient,
+  deleteUserFromSupabaseClient,
+  fetchUsersFromSupabaseClient,
+  syncSettingsToSupabaseClient,
+} from '../../lib/supabase.ts';
 
 export const AdminUsersTab: React.FC = () => {
   const { user: currentUser, isOwner } = useAuth();
@@ -109,10 +115,13 @@ export const AdminUsersTab: React.FC = () => {
       const url = currentUser
         ? `/api/superadmin/users?userId=${encodeURIComponent(currentUser.id)}&username=${encodeURIComponent(currentUser.username || '')}`
         : '/api/superadmin/users';
-      const res = await fetch(url, { cache: 'no-store' });
-      if (res.ok) {
+      const [res, supaUsers] = await Promise.all([
+        fetch(url, { cache: 'no-store' }).catch(() => null),
+        fetchUsersFromSupabaseClient(),
+      ]);
+      let loadedUsers: AdminUser[] = [];
+      if (res && res.ok) {
         const data = await res.json();
-        let loadedUsers: AdminUser[] = [];
         if (Array.isArray(data)) {
           loadedUsers = data;
         } else if (data && Array.isArray(data.users)) {
@@ -120,11 +129,28 @@ export const AdminUsersTab: React.FC = () => {
         } else if (data && Array.isArray(data.admins)) {
           loadedUsers = data.admins;
         }
-        if (loadedUsers.length > 0) {
-          const mergedList = replaceCachedAdminsFromServer(loadedUsers);
-          setUsers(mergedList);
-          return;
+      }
+      if (Array.isArray(supaUsers) && supaUsers.length > 0) {
+        const byUname = new Map<string, AdminUser>();
+        for (const u of loadedUsers) {
+          if (u && u.username) byUname.set(u.username.toLowerCase(), u);
         }
+        for (const su of supaUsers) {
+          if (!su || !su.username) continue;
+          const key = su.username.toLowerCase();
+          const existing = byUname.get(key);
+          byUname.set(key, {
+            ...(existing || {}),
+            ...su,
+            password: su.password || existing?.password || (su.role === 'super_admin' ? 'super123' : 'admin123'),
+          });
+        }
+        loadedUsers = Array.from(byUname.values());
+      }
+      if (loadedUsers.length > 0) {
+        const mergedList = replaceCachedAdminsFromServer(loadedUsers);
+        setUsers(mergedList);
+        return;
       }
       setUsers(getCachedAdminsList());
     } catch (err) {
@@ -376,6 +402,7 @@ export const AdminUsersTab: React.FC = () => {
     };
 
     saveCachedAdminUser(updatedUser);
+    syncUserToSupabaseClient(updatedUser).catch(() => {});
     setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
     window.dispatchEvent(new Event('admins-updated'));
     setSuccessMsg(`Data ${updatedUser.name} dan URL undangan berhasil diperbarui!`);
@@ -425,6 +452,7 @@ export const AdminUsersTab: React.FC = () => {
     const newStatus = user.active === false ? true : false;
     const updatedUser: AdminUser = { ...user, active: newStatus };
     saveCachedAdminUser(updatedUser);
+    syncUserToSupabaseClient(updatedUser).catch(() => {});
     setUsers((prev) => prev.map((u) => (u.id === user.id ? updatedUser : u)));
     setSuccessMsg(`Status akun @${user.username} berhasil diubah menjadi ${newStatus ? 'Aktif' : 'Nonaktif'}.`);
     setTimeout(() => setSuccessMsg(null), 3000);
@@ -499,7 +527,7 @@ export const AdminUsersTab: React.FC = () => {
     setFormLoading(true);
     setErrorMsg(null);
 
-    const applyCreatedUserSuccess = (createdUser: AdminUser, savedOnServer: boolean = false) => {
+    const applyCreatedUserSuccess = async (createdUser: AdminUser, savedOnServer: boolean = false, createdSettings?: any) => {
       const fullUser: AdminUser & { password?: string } = {
         ...createdUser,
         password: password.trim(),
@@ -508,6 +536,11 @@ export const AdminUsersTab: React.FC = () => {
         createdAt: createdUser.createdAt || new Date().toISOString(),
       };
       saveCachedAdminUser(fullUser, !savedOnServer);
+      // Directly sync user & wedding settings to Supabase so it is 100% persisted in Supabase immediately
+      await syncUserToSupabaseClient(fullUser);
+      if (createdSettings && resolvedSlug) {
+        await syncSettingsToSupabaseClient(createdSettings, resolvedSlug);
+      }
       setUsers((prev) => [
         fullUser,
         ...prev.filter(
@@ -516,7 +549,7 @@ export const AdminUsersTab: React.FC = () => {
             u.username.toLowerCase() !== fullUser.username.toLowerCase()
         ),
       ]);
-      setSuccessMsg(`Akun ${fullUser.name} (@${fullUser.username}) berhasil dibuat!`);
+      setSuccessMsg(`Akun ${fullUser.name} (@${fullUser.username}) berhasil dibuat dan tersimpan di Supabase!`);
       setIsAddModalOpen(false);
       fetchUsers();
 
@@ -557,7 +590,7 @@ export const AdminUsersTab: React.FC = () => {
       if (contentType.includes('application/json')) {
         const data = await res.json();
         if (res.ok && (data.user || data.admin)) {
-          applyCreatedUserSuccess(data.user || data.admin, true);
+          await applyCreatedUserSuccess(data.user || data.admin, true, data.settings);
           return;
         }
         if (!isOwner && res.status === 403) {
@@ -586,7 +619,7 @@ export const AdminUsersTab: React.FC = () => {
         createdByName: role === 'admin' ? currentUser?.name : undefined,
         createdAt: new Date().toISOString(),
       };
-      applyCreatedUserSuccess(fallbackUser);
+      await applyCreatedUserSuccess(fallbackUser);
     } catch {
       const fallbackUser: AdminUser = {
         id: `user-${role === 'super_admin' ? 'super' : 'admin'}-${Date.now()}`,
@@ -607,7 +640,7 @@ export const AdminUsersTab: React.FC = () => {
         createdByName: role === 'admin' ? currentUser?.name : undefined,
         createdAt: new Date().toISOString(),
       };
-      applyCreatedUserSuccess(fallbackUser);
+      await applyCreatedUserSuccess(fallbackUser);
     } finally {
       setFormLoading(false);
     }
@@ -644,11 +677,13 @@ export const AdminUsersTab: React.FC = () => {
       } else {
         deleteCachedAdminUser(user.id);
         deleteCachedAdminUser(user.username);
+        await deleteUserFromSupabaseClient(user.id, user.username);
         if (Array.isArray(data.deletedAdminWOs)) {
-          data.deletedAdminWOs.forEach((wo: AdminUser) => {
+          for (const wo of data.deletedAdminWOs as AdminUser[]) {
             deleteCachedAdminUser(wo.id);
             deleteCachedAdminUser(wo.username);
-          });
+            await deleteUserFromSupabaseClient(wo.id, wo.username);
+          }
         }
         setSuccessMsg(data.message || `Akun ${user.name} berhasil dihapus.`);
         fetchUsers();
@@ -658,6 +693,7 @@ export const AdminUsersTab: React.FC = () => {
       console.error('Failed to delete user:', err);
       deleteCachedAdminUser(user.id);
       deleteCachedAdminUser(user.username);
+      await deleteUserFromSupabaseClient(user.id, user.username);
       setUsers((prev) => prev.filter((u) => u.id !== user.id));
       setSuccessMsg(`Akun ${user.name} berhasil dihapus.`);
       setTimeout(() => setSuccessMsg(null), 5000);
@@ -708,6 +744,7 @@ export const AdminUsersTab: React.FC = () => {
       password: newPasswordInput,
     };
     saveCachedAdminUser(updatedTarget);
+    syncUserToSupabaseClient(updatedTarget).catch(() => {});
     setUsers((prev) => prev.map((u) => (u.id === updatedTarget.id ? updatedTarget : u)));
 
     try {

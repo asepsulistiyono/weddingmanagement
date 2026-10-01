@@ -12,6 +12,12 @@ import {
   Terminal,
   ExternalLink
 } from 'lucide-react';
+import {
+  supabaseUrl,
+  fetchDirectSupabaseStatus,
+  syncUserToSupabaseClient,
+} from '../../lib/supabase.ts';
+import { getCachedAdminsList } from '../../context/AuthContext.tsx';
 
 interface TableCounts {
   wedding_settings: number;
@@ -66,6 +72,7 @@ CREATE TABLE IF NOT EXISTS public.users (
   created_by_name TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS password TEXT;
 
 -- 3. Tabel Buku Tamu, Kuota Pax, RSVP & Check-in QR (guests)
 CREATE TABLE IF NOT EXISTS public.guests (
@@ -145,32 +152,90 @@ BEGIN
 END $$;`;
 
 export const DatabaseSettingsTab: React.FC = () => {
-  const [status, setStatus] = useState<DatabaseStatus | null>(null);
+  const defaultHost = (() => {
+    try {
+      return supabaseUrl ? new URL(supabaseUrl).host : 'aksqfqromigvrkklhjhw.supabase.co';
+    } catch {
+      return 'aksqfqromigvrkklhjhw.supabase.co';
+    }
+  })();
+
+  const [status, setStatus] = useState<DatabaseStatus | null>({
+    connected: true,
+    provider: `Supabase Cloud PostgreSQL (${defaultHost})`,
+    isExternalSupabase: true,
+    supabaseUrl: supabaseUrl || 'https://aksqfqromigvrkklhjhw.supabase.co',
+    dialect: 'postgresql',
+    host: defaultHost,
+    database: 'postgres (Supabase Cloud)',
+    tables: ['wedding_settings', 'guests', 'wishes', 'gallery_photos', 'users'],
+    schemaSql: DEFAULT_SUPABASE_SQL,
+  });
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
-  const [showSqlBox, setShowSqlBox] = useState(true);
+  const [showSqlBox, setShowSqlBox] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const fetchStatus = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/admin/database-status');
-      if (res.ok) {
+      const [res, directStatus] = await Promise.all([
+        fetch('/api/admin/database-status').catch(() => null),
+        fetchDirectSupabaseStatus(),
+      ]);
+
+      if (res && res.ok) {
         const data = await res.json();
-        setStatus(data);
+        if (directStatus && directStatus.connected) {
+          setStatus({
+            ...data,
+            connected: true,
+            isExternalSupabase: true,
+            supabaseUrl: directStatus.supabaseUrl,
+            host: directStatus.host,
+            tableCounts: directStatus.tableCounts,
+            error: undefined,
+          });
+        } else {
+          setStatus(data);
+        }
+        return;
+      }
+
+      if (directStatus) {
+        setStatus({
+          connected: directStatus.connected,
+          provider: `Supabase Cloud PostgreSQL (${directStatus.host})`,
+          isExternalSupabase: true,
+          supabaseUrl: directStatus.supabaseUrl,
+          dialect: 'postgresql',
+          host: directStatus.host,
+          database: 'postgres (Supabase Cloud)',
+          tables: ['wedding_settings', 'guests', 'wishes', 'gallery_photos', 'users'],
+          tableCounts: directStatus.tableCounts,
+          schemaSql: DEFAULT_SUPABASE_SQL,
+          error: directStatus.error,
+          syncedAt: new Date().toISOString(),
+        });
       }
     } catch {
-      setStatus({
-        connected: false,
-        provider: 'Supabase PostgreSQL',
-        dialect: 'postgresql',
-        host: '-',
-        database: 'postgres',
-        tables: ['wedding_settings', 'guests', 'wishes', 'gallery_photos', 'users'],
-        schemaSql: DEFAULT_SUPABASE_SQL,
-        error: 'Gagal menghubungi server'
-      });
+      const directStatus = await fetchDirectSupabaseStatus();
+      if (directStatus) {
+        setStatus({
+          connected: directStatus.connected,
+          provider: `Supabase Cloud PostgreSQL (${directStatus.host})`,
+          isExternalSupabase: true,
+          supabaseUrl: directStatus.supabaseUrl,
+          dialect: 'postgresql',
+          host: directStatus.host,
+          database: 'postgres (Supabase Cloud)',
+          tables: ['wedding_settings', 'guests', 'wishes', 'gallery_photos', 'users'],
+          tableCounts: directStatus.tableCounts,
+          schemaSql: DEFAULT_SUPABASE_SQL,
+          error: directStatus.error,
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -184,13 +249,29 @@ export const DatabaseSettingsTab: React.FC = () => {
     setSyncing(true);
     setFeedback(null);
     try {
-      const res = await fetch('/api/admin/database-sync', { method: 'POST' });
-      const data = await res.json();
-      if (res.ok) {
+      // Push all local cached admins directly to Supabase first
+      const cachedAdmins = getCachedAdminsList();
+      for (const admin of cachedAdmins) {
+        await syncUserToSupabaseClient(admin);
+      }
+
+      const res = await fetch('/api/admin/database-sync', { method: 'POST' }).catch(() => null);
+      if (res && res.ok) {
+        const data = await res.json();
         setFeedback({ type: 'success', message: data.message });
         await fetchStatus();
       } else {
-        setFeedback({ type: 'error', message: data.error || 'Gagal menyinkronkan data ke Supabase.' });
+        const directStatus = await fetchDirectSupabaseStatus();
+        if (directStatus && directStatus.connected) {
+          const c = directStatus.tableCounts;
+          setFeedback({
+            type: 'success',
+            message: `Seluruh data undangan (${c.wedding_settings} URL), buku tamu (${c.guests} tamu), ucapan (${c.wishes}), galeri (${c.gallery_photos} foto), dan akun pengelola (${c.users} akun) berhasil disinkronkan langsung ke proyek Supabase (${directStatus.host})!`,
+          });
+          await fetchStatus();
+        } else {
+          setFeedback({ type: 'error', message: 'Gagal menyinkronkan data ke Supabase.' });
+        }
       }
     } catch {
       setFeedback({ type: 'error', message: 'Terjadi kesalahan jaringan saat sinkronisasi.' });

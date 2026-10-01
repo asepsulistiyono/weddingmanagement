@@ -31,6 +31,7 @@ import { compressImageFile, formatFileSize } from '../../utils/imageCompressor.t
 import { generateWeddingSlug, sanitizeSlug, getFullInvitationUrl } from '../../utils/slugHelper.ts';
 import { useAuth, saveCachedAdminUser } from '../../context/AuthContext.tsx';
 import { useRealtime } from '../../context/RealtimeContext.tsx';
+import { syncSettingsToSupabaseClient, syncUserToSupabaseClient } from '../../lib/supabase.ts';
 
 interface SettingsTabProps {
   settings: WeddingSettings | null;
@@ -645,16 +646,19 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     setBrideName(resolvedBrideFull);
     setBrideNick(resolvedBrideNick);
     updateSettingsDirectly(updated);
+    if (targetSlug) {
+      syncSettingsToSupabaseClient(updated, targetSlug).catch(() => {});
+      syncSettingsToSupabaseClient(updated, 'main').catch(() => {});
+    }
     if (user && !user.isOwner) {
-      saveCachedAdminUser(
-        {
-          ...user,
-          name: coupleDisplay,
-          coupleNames: coupleDisplay,
-          weddingSlug: targetSlug
-        },
-        false
-      );
+      const updatedUserObj = {
+        ...user,
+        name: coupleDisplay,
+        coupleNames: coupleDisplay,
+        weddingSlug: targetSlug
+      };
+      saveCachedAdminUser(updatedUserObj, false);
+      syncUserToSupabaseClient(updatedUserObj).catch(() => {});
       window.dispatchEvent(new Event('admins-updated'));
     }
     if (targetSlug) {

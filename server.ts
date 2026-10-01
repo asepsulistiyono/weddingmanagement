@@ -287,6 +287,9 @@ function createWeddingTemplate(slug: string, groomName: string, brideName: strin
     return existing;
   }
   const clone: WeddingSettings = JSON.parse(JSON.stringify(weddingSettings));
+  delete (clone as any).oldSlug;
+  (clone as any).updatedAt = new Date().toISOString();
+  clone.id = cleanSlug;
   clone.slug = cleanSlug;
   clone.coupleNames = `${groomName} & ${brideName}`;
   clone.title = `The Wedding of ${groomName} & ${brideName}`;
@@ -2267,6 +2270,7 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], async (req, res) =
 
   let finalWeddingSlug: string | undefined = undefined;
   let coupleNames: string | undefined = undefined;
+  let createdWeddingSettings: WeddingSettings | undefined = undefined;
 
   if (role === 'super_admin' || groomName || brideName || customSlug) {
     const gn = groomName ? String(groomName).trim() : finalName.split('&')[0]?.trim() || 'Thomas';
@@ -2276,8 +2280,9 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], async (req, res) =
       : generateWeddingSlug(gn, bn);
     coupleNames = `${gn} & ${bn}`;
 
-    // Buat template acara mandiri khusus wedding slug ini
-    createWeddingTemplate(finalWeddingSlug, gn, bn);
+    // Buat template acara mandiri khusus wedding slug ini dan simpan langsung ke Supabase & PostgreSQL
+    createdWeddingSettings = createWeddingTemplate(finalWeddingSlug, gn, bn);
+    await dbRepo.saveSettings(createdWeddingSettings, finalWeddingSlug);
   }
 
   // Tautkan Admin WO dengan Super Admin pembuatnya
@@ -2386,6 +2391,7 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], async (req, res) =
     success: true, 
     admin: newAdmin, 
     user: newAdmin,
+    settings: createdWeddingSettings,
     weddingSlug: assignedWeddingSlug,
     invitationUrl: assignedWeddingSlug ? `/#/${assignedWeddingSlug}` : '/'
   });

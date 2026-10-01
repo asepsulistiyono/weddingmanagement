@@ -5,6 +5,8 @@ import {
   isSupabaseReady,
   markSupabaseKeyInvalid,
   clearSupabaseKeyError,
+  packCreatedByWithPassword,
+  unpackCreatedByAndPassword,
 } from '../../supabase.ts';
 import { 
   weddingSettingsTable, 
@@ -88,6 +90,7 @@ CREATE TABLE IF NOT EXISTS public.users (
   created_by_name TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS password TEXT;
 
 -- 3. Tabel Buku Tamu, Kuota Pax, RSVP & Check-in QR (guests)
 CREATE TABLE IF NOT EXISTS public.guests (
@@ -772,10 +775,11 @@ export async function getAllUsers(): Promise<Array<AdminUser & { password?: stri
             u.role === 'owner' ||
             String(u.email || '').toLowerCase() === 'asepsulistiyono1@gmail.com' ||
             String(u.username || '').toLowerCase() === 'asepsulistiyono1';
+          const unpacked = unpackCreatedByAndPassword(u.created_by, u.password);
           byKey.set(uname, {
             id: isOwnerRow ? 'user-owner-1' : (existing?.id || id),
             username: u.username || existing?.username || (u.email ? String(u.email).split('@')[0] : 'admin'),
-            password: u.password || existing?.password || undefined,
+            password: unpacked.password || existing?.password || undefined,
             name: u.name || existing?.name || u.username || (u.email ? String(u.email).split('@')[0] : 'Admin'),
             email: u.email || existing?.email,
             role: (u.role === 'owner' ? 'super_admin' : (u.role as AdminUser['role'])) || existing?.role || 'admin',
@@ -784,7 +788,7 @@ export async function getAllUsers(): Promise<Array<AdminUser & { password?: stri
             phone: u.phone || existing?.phone || undefined,
             notes: u.notes || existing?.notes || undefined,
             active: u.active !== false,
-            createdBy: u.created_by || existing?.createdBy || undefined,
+            createdBy: unpacked.createdBy || existing?.createdBy || undefined,
             createdByName: u.created_by_name || existing?.createdByName || undefined,
             isOwner: isOwnerRow,
             createdAt: u.created_at ? new Date(u.created_at).toISOString() : (existing?.createdAt || new Date().toISOString())
@@ -851,11 +855,17 @@ export async function createDbUser(user: {
         .from('users')
         .upsert({ ...baseRow, password: user.password || null }, { onConflict: 'uid' });
 
-      // If the user's Supabase users table does not have a 'password' column (PGRST204), upsert without 'password'
+      // If the user's Supabase users table does not have a 'password' column (PGRST204), upsert with password packed in created_by
       if (error && (error.code === 'PGRST204' || String(error.message || '').includes('password'))) {
         const retryRes = await supabase
           .from('users')
-          .upsert(baseRow, { onConflict: 'uid' });
+          .upsert(
+            {
+              ...baseRow,
+              created_by: packCreatedByWithPassword(user.createdBy, user.password),
+            },
+            { onConflict: 'uid' }
+          );
         error = retryRes.error;
       }
 

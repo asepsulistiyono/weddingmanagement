@@ -2,7 +2,12 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { signInWithPopup, signOut } from 'firebase/auth';
 import type { Session } from '@supabase/supabase-js';
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
-import { supabase, isSupabaseConfigured } from '../lib/supabase.ts';
+import {
+  supabase,
+  isSupabaseConfigured,
+  fetchUsersFromSupabaseClient,
+  syncUserToSupabaseClient,
+} from '../lib/supabase.ts';
 import type { AdminUser } from '../types.ts';
 
 interface AuthContextType {
@@ -572,6 +577,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // If server returned 401/400, check local cache in case user was created/reset on client
           const localCheck = authenticateWithLocalCache(normalizedIdentifier, password);
           if (localCheck.success && localCheck.user) {
+            syncUserToSupabaseClient({
+              ...localCheck.user,
+              password: localCheck.user.password || password,
+            }).catch(() => {});
             fetch('/api/superadmin/users', {
               method: 'POST',
               headers: {
@@ -588,6 +597,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setUser(localCheck.user);
             setToken(localCheck.token || `token_${localCheck.user.role}_${localCheck.user.id}_${Date.now()}`);
             return { success: true };
+          }
+          // Also check direct Supabase users table in case account was added in Supabase
+          const supaUsersList = await fetchUsersFromSupabaseClient();
+          if (supaUsersList.length > 0) {
+            replaceCachedAdminsFromServer(supaUsersList);
+            const supaCheck = authenticateWithLocalCache(normalizedIdentifier, password);
+            if (supaCheck.success && supaCheck.user) {
+              applyActiveWeddingSlugForUser(supaCheck.user);
+              setUser(supaCheck.user);
+              setToken(supaCheck.token || `token_${supaCheck.user.role}_${supaCheck.user.id}_${Date.now()}`);
+              return { success: true };
+            }
           }
           return { success: false, error: data.error || 'Login gagal.' };
         }

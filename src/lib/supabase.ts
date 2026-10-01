@@ -5,5 +5,12 @@ export {
   isSupabaseReady,
   markSupabaseKeyInvalid,
   getSupabaseKeyError,
+  packCreatedByWithPassword,
+  unpackCreatedByAndPassword,
+  syncUserToSupabaseClient,
+  deleteUserFromSupabaseClient,
+  fetchUsersFromSupabaseClient,
+  syncSettingsToSupabaseClient,
+  fetchDirectSupabaseStatus,
   default,
 } from '../../supabase.ts';
