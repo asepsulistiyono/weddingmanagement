@@ -720,20 +720,21 @@ export async function deleteGallery(id: string): Promise<void> {
 
 // ----------------- USERS -----------------
 export async function getAllUsers(): Promise<Array<AdminUser & { password?: string }>> {
-  const byId = new Map<string, AdminUser & { password?: string }>();
+  const byKey = new Map<string, AdminUser & { password?: string }>();
 
   if (isPostgresReady()) {
     try {
       const list = await db.select().from(users).orderBy(desc(users.createdAt));
       for (const u of list) {
         const id = u.uid || `user-${u.id}`;
-        byId.set(id, {
+        const uname = (u.username || u.email.split('@')[0]).toLowerCase();
+        byKey.set(uname, {
           id,
           username: u.username || u.email.split('@')[0],
           password: u.password || undefined,
           name: u.name || u.username || u.email.split('@')[0],
           email: u.email,
-          role: (u.role as AdminUser['role']) || 'admin',
+          role: (u.role === 'owner' ? 'super_admin' : (u.role as AdminUser['role'])) || 'admin',
           weddingSlug: u.weddingSlug || undefined,
           coupleNames: u.coupleNames || undefined,
           phone: u.phone || undefined,
@@ -741,7 +742,10 @@ export async function getAllUsers(): Promise<Array<AdminUser & { password?: stri
           active: u.active !== false,
           createdBy: u.createdBy || undefined,
           createdByName: u.createdByName || undefined,
-          isOwner: u.email?.toLowerCase() === 'asepsulistiyono1@gmail.com' || u.username?.toLowerCase() === 'asepsulistiyono1',
+          isOwner:
+            u.role === 'owner' ||
+            u.email?.toLowerCase() === 'asepsulistiyono1@gmail.com' ||
+            u.username?.toLowerCase() === 'asepsulistiyono1',
           createdAt: u.createdAt ? u.createdAt.toISOString() : new Date().toISOString()
         });
       }
@@ -762,24 +766,28 @@ export async function getAllUsers(): Promise<Array<AdminUser & { password?: stri
         clearSupabaseKeyError();
         for (const u of data as any[]) {
           const id = u.uid || `user-${u.id}`;
-          byId.set(id, {
-            id,
-            username: u.username || (u.email ? String(u.email).split('@')[0] : 'admin'),
-            password: u.password || undefined,
-            name: u.name || u.username || (u.email ? String(u.email).split('@')[0] : 'Admin'),
-            email: u.email,
-            role: (u.role as AdminUser['role']) || 'admin',
-            weddingSlug: u.wedding_slug || undefined,
-            coupleNames: u.couple_names || undefined,
-            phone: u.phone || undefined,
-            notes: u.notes || undefined,
+          const uname = (u.username || (u.email ? String(u.email).split('@')[0] : 'admin')).toLowerCase();
+          const existing = byKey.get(uname);
+          const isOwnerRow =
+            u.role === 'owner' ||
+            String(u.email || '').toLowerCase() === 'asepsulistiyono1@gmail.com' ||
+            String(u.username || '').toLowerCase() === 'asepsulistiyono1';
+          byKey.set(uname, {
+            id: isOwnerRow ? 'user-owner-1' : (existing?.id || id),
+            username: u.username || existing?.username || (u.email ? String(u.email).split('@')[0] : 'admin'),
+            password: u.password || existing?.password || undefined,
+            name: u.name || existing?.name || u.username || (u.email ? String(u.email).split('@')[0] : 'Admin'),
+            email: u.email || existing?.email,
+            role: (u.role === 'owner' ? 'super_admin' : (u.role as AdminUser['role'])) || existing?.role || 'admin',
+            weddingSlug: u.wedding_slug || existing?.weddingSlug || undefined,
+            coupleNames: u.couple_names || existing?.coupleNames || undefined,
+            phone: u.phone || existing?.phone || undefined,
+            notes: u.notes || existing?.notes || undefined,
             active: u.active !== false,
-            createdBy: u.created_by || undefined,
-            createdByName: u.created_by_name || undefined,
-            isOwner:
-              String(u.email || '').toLowerCase() === 'asepsulistiyono1@gmail.com' ||
-              String(u.username || '').toLowerCase() === 'asepsulistiyono1',
-            createdAt: u.created_at ? new Date(u.created_at).toISOString() : new Date().toISOString()
+            createdBy: u.created_by || existing?.createdBy || undefined,
+            createdByName: u.created_by_name || existing?.createdByName || undefined,
+            isOwner: isOwnerRow,
+            createdAt: u.created_at ? new Date(u.created_at).toISOString() : (existing?.createdAt || new Date().toISOString())
           });
         }
       }
@@ -788,7 +796,7 @@ export async function getAllUsers(): Promise<Array<AdminUser & { password?: stri
     }
   }
 
-  return Array.from(byId.values());
+  return Array.from(byKey.values());
 }
 
 export async function createDbUser(user: {
@@ -808,26 +816,49 @@ export async function createDbUser(user: {
 }): Promise<void> {
   if (isSupabaseReady()) {
     try {
-      const { error } = await supabase
+      const cleanUsername = user.username || user.email.split('@')[0];
+      const baseRow: Record<string, any> = {
+        uid: user.uid,
+        username: cleanUsername,
+        email: user.email,
+        name: user.name || cleanUsername,
+        role: user.role || 'admin',
+        wedding_slug: user.weddingSlug || null,
+        couple_names: user.coupleNames || null,
+        phone: user.phone || null,
+        notes: user.notes || null,
+        active: user.active !== false,
+        created_by: user.createdBy || null,
+        created_by_name: user.createdByName || null
+      };
+
+      // Clean up any existing row in Supabase with the same username or email but a different uid
+      const { data: existingSupaUsers } = await supabase.from('users').select('uid, username, email');
+      if (Array.isArray(existingSupaUsers)) {
+        for (const r of existingSupaUsers as any[]) {
+          if (
+            r.uid &&
+            r.uid !== user.uid &&
+            ((r.username && String(r.username).toLowerCase() === cleanUsername.toLowerCase()) ||
+              (r.email && String(r.email).toLowerCase() === user.email.toLowerCase()))
+          ) {
+            await supabase.from('users').delete().eq('uid', r.uid);
+          }
+        }
+      }
+
+      let { error } = await supabase
         .from('users')
-        .upsert(
-          {
-            uid: user.uid,
-            username: user.username || user.email.split('@')[0],
-            password: user.password || null,
-            email: user.email,
-            name: user.name || user.username || user.email.split('@')[0],
-            role: user.role || 'admin',
-            wedding_slug: user.weddingSlug || null,
-            couple_names: user.coupleNames || null,
-            phone: user.phone || null,
-            notes: user.notes || null,
-            active: user.active !== false,
-            created_by: user.createdBy || null,
-            created_by_name: user.createdByName || null
-          },
-          { onConflict: 'uid' }
-        );
+        .upsert({ ...baseRow, password: user.password || null }, { onConflict: 'uid' });
+
+      // If the user's Supabase users table does not have a 'password' column (PGRST204), upsert without 'password'
+      if (error && (error.code === 'PGRST204' || String(error.message || '').includes('password'))) {
+        const retryRes = await supabase
+          .from('users')
+          .upsert(baseRow, { onConflict: 'uid' });
+        error = retryRes.error;
+      }
+
       if (error) handleSupabaseError(error);
       else clearSupabaseKeyError();
     } catch (err) {
