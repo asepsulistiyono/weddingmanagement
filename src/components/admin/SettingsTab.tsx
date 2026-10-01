@@ -29,7 +29,7 @@ import { RELIGION_PRESETS, RELIGION_LIST, type ReligionPresetDetail } from '../.
 import { WEDDING_THEME_TEMPLATES, getThemeById } from '../../utils/themeTemplates.ts';
 import { compressImageFile, formatFileSize } from '../../utils/imageCompressor.ts';
 import { generateWeddingSlug, sanitizeSlug, getFullInvitationUrl } from '../../utils/slugHelper.ts';
-import { useAuth } from '../../context/AuthContext.tsx';
+import { useAuth, saveCachedAdminUser } from '../../context/AuthContext.tsx';
 import { useRealtime } from '../../context/RealtimeContext.tsx';
 
 interface SettingsTabProps {
@@ -143,9 +143,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       settings?.slug ||
       (settings?.groom?.nickname && settings?.bride?.nickname
         ? generateWeddingSlug(settings.groom.nickname, settings.bride.nickname)
-        : 'rizky_dan_siti')
+        : 'romeo_dan_juliet')
   );
-  const [isSlugManual, setIsSlugManual] = useState(true);
+  const [isSlugManual, setIsSlugManual] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
 
   const settingsSignature = settings
@@ -294,15 +294,75 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     }
   }, [settings?.themeTemplateId]);
 
+  const extractFirstNickname = (fullNameVal: string): string => {
+    const cleaned = fullNameVal
+      .replace(/(?:^|\s)(?:bpk|ibu|mas|mbak|dr|dra|drs|ir|prof|h|hj)\.?\s+/gi, ' ')
+      .replace(/,\s*.*$/, '')
+      .trim();
+    return cleaned.split(/\s+/)[0] || fullNameVal.trim();
+  };
+
+  const handleGroomNameChange = (val: string) => {
+    const prevFirst = extractFirstNickname(groomName).toLowerCase();
+    const curNickLower = groomNick.trim().toLowerCase();
+    setGroomName(val);
+    const shouldAutoNick =
+      !curNickLower ||
+      curNickLower === groomName.trim().toLowerCase() ||
+      curNickLower === prevFirst ||
+      curNickLower === 'rizky';
+    const nextNick = shouldAutoNick ? extractFirstNickname(val) : groomNick;
+    if (shouldAutoNick) {
+      setGroomNick(nextNick);
+    }
+    if (!isSlugManual && (nextNick || brideNick)) {
+      setWeddingSlug(generateWeddingSlug(nextNick || val, brideNick || brideName));
+    }
+  };
+
+  const handleBrideNameChange = (val: string) => {
+    const prevFirst = extractFirstNickname(brideName).toLowerCase();
+    const curNickLower = brideNick.trim().toLowerCase();
+    setBrideName(val);
+    const shouldAutoNick =
+      !curNickLower ||
+      curNickLower === brideName.trim().toLowerCase() ||
+      curNickLower === prevFirst ||
+      curNickLower === 'siti';
+    const nextNick = shouldAutoNick ? extractFirstNickname(val) : brideNick;
+    if (shouldAutoNick) {
+      setBrideNick(nextNick);
+    }
+    if (!isSlugManual && (groomNick || nextNick)) {
+      setWeddingSlug(generateWeddingSlug(groomNick || groomName, nextNick || val));
+    }
+  };
+
   const handleGroomNickChange = (val: string) => {
+    const prevNick = groomNick.trim();
     setGroomNick(val);
+    if (
+      !groomName.trim() ||
+      groomName.trim() === prevNick ||
+      (groomName.trim() === 'Rizky Pratama Putra, S.T.' && !val.trim().toLowerCase().startsWith('rizky'))
+    ) {
+      setGroomName(val);
+    }
     if (!isSlugManual) {
       setWeddingSlug(generateWeddingSlug(val, brideNick));
     }
   };
 
   const handleBrideNickChange = (val: string) => {
+    const prevNick = brideNick.trim();
     setBrideNick(val);
+    if (
+      !brideName.trim() ||
+      brideName.trim() === prevNick ||
+      (brideName.trim() === 'Siti Nurhaliza Putri, S.Psi.' && !val.trim().toLowerCase().startsWith('siti'))
+    ) {
+      setBrideName(val);
+    }
     if (!isSlugManual) {
       setWeddingSlug(generateWeddingSlug(groomNick, val));
     }
@@ -416,10 +476,34 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     setSaveSuccess(false);
     setSaveError(null);
 
-    const resolvedGroomNick = (groomNick || groomName || 'Mempelai Pria').trim();
-    const resolvedBrideNick = (brideNick || brideName || 'Mempelai Wanita').trim();
+    const rawGroomName = groomName.trim();
+    const rawBrideName = brideName.trim();
+    const rawGroomNick = groomNick.trim();
+    const rawBrideNick = brideNick.trim();
 
-    const targetSlug = weddingSlug
+    const resolvedGroomNick =
+      rawGroomNick && !(rawGroomNick.toLowerCase() === 'rizky' && rawGroomName && !rawGroomName.toLowerCase().startsWith('rizky'))
+        ? rawGroomNick
+        : extractFirstNickname(rawGroomName) || 'Mempelai Pria';
+
+    const resolvedBrideNick =
+      rawBrideNick && !(rawBrideNick.toLowerCase() === 'siti' && rawBrideName && !rawBrideName.toLowerCase().startsWith('siti'))
+        ? rawBrideNick
+        : extractFirstNickname(rawBrideName) || 'Mempelai Wanita';
+
+    const resolvedGroomFull =
+      rawGroomName && !(rawGroomName === 'Rizky Pratama Putra, S.T.' && resolvedGroomNick.toLowerCase() !== 'rizky')
+        ? rawGroomName
+        : resolvedGroomNick;
+
+    const resolvedBrideFull =
+      rawBrideName && !(rawBrideName === 'Siti Nurhaliza Putri, S.Psi.' && resolvedBrideNick.toLowerCase() !== 'siti')
+        ? rawBrideName
+        : resolvedBrideNick;
+
+    const targetSlug = !isSlugManual
+      ? generateWeddingSlug(resolvedGroomNick, resolvedBrideNick)
+      : weddingSlug
       ? sanitizeSlug(weddingSlug)
       : user?.weddingSlug
       ? sanitizeSlug(user.weddingSlug)
@@ -432,7 +516,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       title: `The Wedding of ${coupleDisplay}`,
       coupleNames: coupleDisplay,
       groom: {
-        fullName: groomName || resolvedGroomNick,
+        fullName: resolvedGroomFull,
         nickname: resolvedGroomNick,
         fatherName: groomFather,
         motherName: groomMother,
@@ -441,7 +525,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         bio: groomBio
       },
       bride: {
-        fullName: brideName || resolvedBrideNick,
+        fullName: resolvedBrideFull,
         nickname: resolvedBrideNick,
         fatherName: brideFather,
         motherName: brideMother,
@@ -493,7 +577,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       },
       groom: {
         ...(baseSettings.groom || {}),
-        fullName: groomName || resolvedGroomNick,
+        fullName: resolvedGroomFull,
         nickname: resolvedGroomNick,
         fatherName: groomFather,
         motherName: groomMother,
@@ -503,7 +587,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       },
       bride: {
         ...(baseSettings.bride || {}),
-        fullName: brideName || resolvedBrideNick,
+        fullName: resolvedBrideFull,
         nickname: resolvedBrideNick,
         fatherName: brideFather,
         motherName: brideMother,
@@ -555,7 +639,24 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     };
 
     // Immediately apply and cache locally so the Super Admin's changes take effect right away
+    setWeddingSlug(targetSlug);
+    setGroomName(resolvedGroomFull);
+    setGroomNick(resolvedGroomNick);
+    setBrideName(resolvedBrideFull);
+    setBrideNick(resolvedBrideNick);
     updateSettingsDirectly(updated);
+    if (user && !user.isOwner) {
+      saveCachedAdminUser(
+        {
+          ...user,
+          name: coupleDisplay,
+          coupleNames: coupleDisplay,
+          weddingSlug: targetSlug
+        },
+        false
+      );
+      window.dispatchEvent(new Event('admins-updated'));
+    }
     if (targetSlug) {
       try {
         sessionStorage.setItem('wedding_active_slug', targetSlug);
@@ -1245,7 +1346,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <input
                 type="text"
                 value={groomName}
-                onChange={(e) => setGroomName(e.target.value)}
+                onChange={(e) => handleGroomNameChange(e.target.value)}
                 className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
               />
             </div>
@@ -1370,7 +1471,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <input
                 type="text"
                 value={brideName}
-                onChange={(e) => setBrideName(e.target.value)}
+                onChange={(e) => handleBrideNameChange(e.target.value)}
                 className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
               />
             </div>

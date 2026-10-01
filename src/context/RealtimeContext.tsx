@@ -482,15 +482,20 @@ function resolveActiveWeddingSlug(): { weddingSlug: string | null; guestSlug: st
     return fromUrl;
   }
   try {
-    const activeSlug = sessionStorage.getItem('wedding_active_slug');
-    if (activeSlug) {
-      return { weddingSlug: activeSlug, guestSlug: fromUrl.guestSlug };
-    }
     const savedUser = localStorage.getItem('wedding_auth_user');
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    const isInternalRoute = hash.startsWith('#/admin') || hash.startsWith('#/gallery');
+
     if (savedUser) {
       const parsed = JSON.parse(savedUser);
       if (parsed?.weddingSlug && !parsed?.isOwner) {
         return { weddingSlug: parsed.weddingSlug, guestSlug: fromUrl.guestSlug };
+      }
+    }
+    if (savedUser || isInternalRoute) {
+      const activeSlug = sessionStorage.getItem('wedding_active_slug');
+      if (activeSlug) {
+        return { weddingSlug: activeSlug, guestSlug: fromUrl.guestSlug };
       }
     }
   } catch {
@@ -810,7 +815,16 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           const cleanToCache = { ...resolvedSettings };
           delete (cleanToCache as any)._locallyModified;
           localStorage.setItem(`wedding_settings_cache_${effectiveSlugKey}`, JSON.stringify(cleanToCache));
+          if (slugKey && slugKey !== effectiveSlugKey) {
+            localStorage.setItem(`wedding_settings_cache_${slugKey}`, JSON.stringify(cleanToCache));
+          }
           localStorage.setItem(`wedding_settings_cache_default`, JSON.stringify(cleanToCache));
+          if (weddingSlug && resolvedSettings?.slug && resolvedSettings.slug !== weddingSlug) {
+            sessionStorage.setItem('wedding_active_slug', resolvedSettings.slug);
+            if (window.location.hash === `#/${weddingSlug}`) {
+              window.location.hash = `#/${resolvedSettings.slug}`;
+            }
+          }
         } catch {
           // ignore
         }
@@ -1159,7 +1173,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     connectWebSocket();
 
-    // Periodic background sync so edits on Computer automatically appear on HP within seconds
+    // Periodic background sync + instant visibility/focus sync so edits on Computer automatically appear on HP
     const syncInterval = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
         refreshData();
@@ -1167,8 +1181,19 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
     }, 3000);
 
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        refreshData();
+        fetchGuests();
+      }
+    };
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
     return () => {
       clearInterval(syncInterval);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }

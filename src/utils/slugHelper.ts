@@ -108,5 +108,13 @@ export function parseWeddingAndGuestFromUrl(): { weddingSlug: string | null; gue
     }
   }
 
+  // 3. Periksa window.location.pathname jika bukan '/' atau '/index.html'
+  if (!weddingSlug && window.location.pathname && window.location.pathname !== '/' && window.location.pathname !== '/index.html') {
+    const rawPath = window.location.pathname.replace(/^\/+|\/+$/g, '');
+    if (rawPath && rawPath !== 'admin' && rawPath !== 'gallery' && !rawPath.startsWith('api/')) {
+      weddingSlug = sanitizeSlug(rawPath);
+    }
+  }
+
   return { weddingSlug, guestSlug };
 }

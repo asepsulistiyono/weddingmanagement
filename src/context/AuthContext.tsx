@@ -107,12 +107,12 @@ export const DEFAULT_FALLBACK_ADMINS: Array<AdminUser & { password?: string }> =
   {
     id: 'user-super-1',
     username: 'superadmin',
-    name: 'Rizky & Siti',
+    name: 'Romeo & Juliet',
     email: 'superadmin@wedding.com',
     role: 'super_admin',
     isOwner: false,
-    weddingSlug: 'rizky_dan_siti',
-    coupleNames: 'Rizky & Siti',
+    weddingSlug: 'romeo_dan_juliet',
+    coupleNames: 'Romeo & Juliet',
     phone: '081234567890',
     notes: 'Paket Platinum 500 Undangan (Gedung Mulia)',
     password: 'super123',
@@ -156,8 +156,8 @@ export const DEFAULT_FALLBACK_ADMINS: Array<AdminUser & { password?: string }> =
     isOwner: false,
     active: true,
     createdBy: 'user-super-1',
-    createdByName: 'Rizky & Siti',
-    weddingSlug: 'rizky_dan_siti',
+    createdByName: 'Romeo & Juliet',
+    weddingSlug: 'romeo_dan_juliet',
     password: 'admin123',
     createdAt: '2026-09-05T14:30:00Z',
   },
@@ -337,9 +337,13 @@ function applyActiveWeddingSlugForUser(loggedInUser: AdminUser) {
         if (window.location.hash !== targetHash) {
           window.location.hash = targetHash;
         }
+        window.dispatchEvent(new Event('hashchange'));
       }
     } else if (loggedInUser.isOwner) {
       sessionStorage.removeItem('wedding_active_slug');
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('hashchange'));
+      }
     }
   } catch {
     // ignore
@@ -445,6 +449,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (matched.weddingSlug && matched.weddingSlug !== prevUser.weddingSlug) {
             try {
               sessionStorage.setItem('wedding_active_slug', matched.weddingSlug);
+              if (typeof window !== 'undefined') {
+                if (window.location.hash === `#/${prevUser.weddingSlug}`) {
+                  window.location.hash = `#/${matched.weddingSlug}`;
+                }
+                window.dispatchEvent(new Event('hashchange'));
+              }
             } catch {
               // ignore
             }

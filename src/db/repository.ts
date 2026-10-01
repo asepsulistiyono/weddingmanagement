@@ -246,14 +246,17 @@ export async function saveSettings(settings: WeddingSettings, id: string = 'main
   }
 }
 
-export async function getAllWeddings(): Promise<Array<{ id: string; data: WeddingSettings }>> {
-  const byId = new Map<string, WeddingSettings>();
+export async function getAllWeddings(): Promise<Array<{ id: string; data: WeddingSettings; updatedAt?: string }>> {
+  const byId = new Map<string, { data: WeddingSettings; updatedAt?: string }>();
 
   if (isPostgresReady()) {
     try {
       const records = await db.select().from(weddingSettingsTable).orderBy(asc(weddingSettingsTable.updatedAt));
       for (const r of records) {
-        byId.set(r.id, r.data as WeddingSettings);
+        const ts = r.updatedAt ? r.updatedAt.toISOString() : undefined;
+        const d = (r.data || {}) as WeddingSettings;
+        if (ts) (d as any).updatedAt = ts;
+        byId.set(r.id, { data: d, updatedAt: ts });
       }
     } catch {
       // ignore
@@ -264,13 +267,17 @@ export async function getAllWeddings(): Promise<Array<{ id: string; data: Weddin
     try {
       const { data, error } = await supabase
         .from('wedding_settings')
-        .select('id, data');
+        .select('id, data, updated_at')
+        .order('updated_at', { ascending: true });
       if (error) {
         handleSupabaseError(error);
       } else if (Array.isArray(data)) {
         clearSupabaseKeyError();
-        for (const r of data) {
-          byId.set(String(r.id), r.data as WeddingSettings);
+        for (const r of data as any[]) {
+          const ts = r.updated_at ? new Date(r.updated_at).toISOString() : undefined;
+          const d = (r.data || {}) as WeddingSettings;
+          if (ts) (d as any).updatedAt = ts;
+          byId.set(String(r.id), { data: d, updatedAt: ts });
         }
       }
     } catch (err) {
@@ -278,7 +285,7 @@ export async function getAllWeddings(): Promise<Array<{ id: string; data: Weddin
     }
   }
 
-  return Array.from(byId.entries()).map(([id, data]) => ({ id, data }));
+  return Array.from(byId.entries()).map(([id, val]) => ({ id, data: val.data, updatedAt: val.updatedAt }));
 }
 
 // ----------------- GUESTS -----------------

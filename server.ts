@@ -365,12 +365,12 @@ let adminUsers: (AdminUser & { password?: string })[] = [
   {
     id: 'user-super-1',
     username: 'superadmin',
-    name: 'Rizky & Siti',
+    name: 'Romeo & Juliet',
     email: 'superadmin@wedding.com',
     role: 'super_admin',
     isOwner: false,
-    weddingSlug: 'rizky_dan_siti',
-    coupleNames: 'Rizky & Siti',
+    weddingSlug: 'romeo_dan_juliet',
+    coupleNames: 'Romeo & Juliet',
     phone: '081234567890',
     notes: 'Paket Platinum 500 Undangan (Gedung Mulia)',
     password: 'super123',
@@ -414,8 +414,8 @@ let adminUsers: (AdminUser & { password?: string })[] = [
     isOwner: false,
     active: true,
     createdBy: 'user-super-1',
-    createdByName: 'Rizky & Siti',
-    weddingSlug: 'rizky_dan_siti',
+    createdByName: 'Romeo & Juliet',
+    weddingSlug: 'romeo_dan_juliet',
     password: 'admin123',
     createdAt: '2026-09-05T14:30:00Z'
   }
@@ -820,6 +820,7 @@ app.post('/api/public/sync-state', async (req, res) => {
         u => u.id === ca.id || (u.username && u.username.toLowerCase() === uname)
       );
       if (idx === -1 || ca._locallyModified) {
+        const prevSlug = idx !== -1 && adminUsers[idx].weddingSlug ? sanitizeSlug(adminUsers[idx].weddingSlug!) : '';
         const cleanAdmin = { ...ca };
         delete cleanAdmin._locallyModified;
         if (idx === -1) {
@@ -829,10 +830,50 @@ app.post('/api/public/sync-state', async (req, res) => {
         }
         adminsChanged = true;
         if (cleanAdmin.role === 'super_admin' && cleanAdmin.weddingSlug) {
+          const cleanSlug = sanitizeSlug(cleanAdmin.weddingSlug);
           const parts = String(cleanAdmin.coupleNames || cleanAdmin.name || '').split('&');
           const gn = parts[0]?.trim() || cleanAdmin.username.split('_')[0] || 'Mempelai Pria';
           const bn = parts[1]?.trim() || cleanAdmin.username.split('_').slice(1).join(' ') || 'Mempelai Wanita';
-          createWeddingTemplate(cleanAdmin.weddingSlug, gn, bn);
+          if (ca._locallyModified && (weddingsMap.has(cleanSlug) || (prevSlug && weddingsMap.has(prevSlug)))) {
+            const baseW = (prevSlug ? weddingsMap.get(prevSlug) : undefined) || weddingsMap.get(cleanSlug) || createWeddingTemplate(cleanSlug, gn, bn);
+            const nextCouple = `${gn} & ${bn}`;
+            const syncedW: WeddingSettings = {
+              ...baseW,
+              id: cleanSlug,
+              slug: cleanSlug,
+              coupleNames: nextCouple,
+              title: `The Wedding of ${nextCouple}`,
+              groom: {
+                ...baseW.groom,
+                fullName: gn,
+                nickname: gn
+              },
+              bride: {
+                ...baseW.bride,
+                fullName: bn,
+                nickname: bn
+              }
+            };
+            (syncedW as any).oldSlug = prevSlug || cleanSlug;
+            (syncedW as any).updatedAt = new Date().toISOString();
+            weddingsMap.set(cleanSlug, syncedW);
+            if (prevSlug && prevSlug !== cleanSlug) {
+              weddingsMap.set(prevSlug, syncedW);
+              await dbRepo.saveSettings(syncedW, prevSlug);
+            }
+            weddingSettings = syncedW;
+            weddingsMap.set('main', syncedW);
+            weddingsMap.set('default', syncedW);
+            await dbRepo.saveSettings(syncedW, cleanSlug);
+            await dbRepo.saveSettings(syncedW, 'main');
+            await dbRepo.saveSettings(syncedW, 'default');
+            broadcast({
+              type: 'SETTINGS_UPDATED',
+              payload: syncedW
+            });
+          } else {
+            createWeddingTemplate(cleanSlug, gn, bn);
+          }
         }
         await dbRepo.createDbUser({
           uid: cleanAdmin.id,
@@ -859,17 +900,38 @@ app.post('/api/public/sync-state', async (req, res) => {
     }
   }
 
-  // Sync wedding settings & galleries from client only when not yet saved on server
+  // Sync wedding settings & galleries from client whenever locally modified
   if (Array.isArray(settingsList)) {
     for (const item of settingsList) {
       if (!item || !item.settings || !item.isLocallyModified) continue;
       const s: WeddingSettings = { ...item.settings };
+      const oldSlugKey = (s as any).oldSlug ? sanitizeSlug((s as any).oldSlug) : '';
       delete (s as any)._locallyModified;
       const slugKey = sanitizeSlug(s.slug || item.slug || 'main') || 'main';
-      if (!weddingsMap.has(slugKey)) {
-        weddingsMap.set(slugKey, s);
-        await dbRepo.saveSettings(s, slugKey);
+      s.slug = slugKey === 'main' || slugKey === 'default' ? (s.slug || 'rizky_dan_siti') : slugKey;
+      (s as any).updatedAt = (s as any).updatedAt || new Date().toISOString();
+
+      weddingsMap.set(slugKey, s);
+      if (s.slug) {
+        weddingsMap.set(sanitizeSlug(s.slug), s);
       }
+      if (oldSlugKey && oldSlugKey !== slugKey) {
+        weddingsMap.set(oldSlugKey, s);
+        await dbRepo.saveSettings(s, oldSlugKey);
+      }
+      weddingSettings = s;
+      weddingsMap.set('main', s);
+      weddingsMap.set('default', s);
+
+      await dbRepo.saveSettings(s, slugKey);
+      await dbRepo.saveSettings(s, 'main');
+      await dbRepo.saveSettings(s, 'default');
+
+      broadcast({
+        type: 'SETTINGS_UPDATED',
+        payload: { ...s, ...(oldSlugKey ? { oldSlug: oldSlugKey } : {}) } as WeddingSettings
+      });
+
       if (Array.isArray(s.galleries)) {
         for (const gal of s.galleries) {
           if (gal && gal.id && gal.url) {
@@ -1948,16 +2010,18 @@ app.put('/api/superadmin/settings', async (req, res) => {
     title
   };
   delete (updated as any)._locallyModified;
-  delete (updated as any).oldSlug;
   delete (updated as any).adminEmail;
+  (updated as any).oldSlug = oldKey || targetSlug;
+  (updated as any).updatedAt = new Date().toISOString();
 
   weddingsMap.set(targetSlug, updated);
   weddingsMap.set('main', updated);
   weddingsMap.set('default', updated);
 
-  // If old slug existed and changed, update map
+  // If old slug existed and changed, update map AND persist to database so old URLs/sessions stay synced
   if (oldKey && oldKey !== targetSlug && oldKey !== 'main' && oldKey !== 'default') {
     weddingsMap.set(oldKey, updated);
+    await dbRepo.saveSettings(updated, oldKey);
   }
 
   // Update associated Super Admin & Admin WO accounts (never overwrite the Owner account)
@@ -1979,6 +2043,8 @@ app.put('/api/superadmin/settings', async (req, res) => {
       u.coupleNames = coupleNames;
       if (u.role === 'super_admin' && coupleNames) {
         u.name = coupleNames;
+      } else if (u.role === 'admin' && coupleNames) {
+        u.createdByName = coupleNames;
       }
       usersUpdated = true;
       await dbRepo.createDbUser({
@@ -2328,7 +2394,12 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], async (req, res) =
 // Update user details / wedding URL slug / password / phone / notes
 app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (req, res) => {
   await ensureDatabaseSynced();
-  const targetUser = adminUsers.find(u => u.id === req.params.id);
+  const reqUsername = req.body?.username ? String(req.body.username).trim().toLowerCase() : '';
+  const targetUser = adminUsers.find(
+    u =>
+      u.id === req.params.id ||
+      (reqUsername && u.username && u.username.toLowerCase() === reqUsername)
+  );
   if (!targetUser) {
     return res.status(404).json({ error: 'Akun pengelola tidak ditemukan.' });
   }
@@ -2351,6 +2422,8 @@ app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (req,
     (targetUser as any).password = String(password).trim();
   }
 
+  let updatedWeddingSettings: WeddingSettings | undefined = undefined;
+
   // If updating the Super Admin's wedding slug & couple names
   if (targetUser.role === 'super_admin' && (groomName || brideName || customSlug)) {
     const oldSlug = targetUser.weddingSlug ? sanitizeSlug(targetUser.weddingSlug) : '';
@@ -2363,12 +2436,44 @@ app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (req,
     targetUser.coupleNames = nextCoupleNames;
     targetUser.name = nextCoupleNames;
 
+    // Also update any Admin WO staff linked to this Super Admin
+    for (const staff of adminUsers) {
+      if (
+        staff.role === 'admin' &&
+        !staff.isOwner &&
+        (staff.createdBy === targetUser.id ||
+          staff.createdBy === targetUser.username ||
+          (oldSlug && staff.weddingSlug === oldSlug))
+      ) {
+        staff.weddingSlug = newSlug;
+        staff.createdByName = nextCoupleNames;
+        await dbRepo.createDbUser({
+          uid: staff.id,
+          username: staff.username,
+          password: (staff as any).password,
+          email: staff.email || `${staff.username}@wedding.local`,
+          name: staff.name,
+          role: staff.role,
+          weddingSlug: staff.weddingSlug,
+          coupleNames: staff.coupleNames,
+          phone: staff.phone,
+          notes: staff.notes,
+          active: staff.active,
+          createdBy: staff.createdBy,
+          createdByName: staff.createdByName
+        });
+      }
+    }
+
     const existingSettings =
       (oldSlug ? weddingsMap.get(oldSlug) : undefined) ||
       weddingsMap.get(newSlug) ||
       createWeddingTemplate(newSlug, gn, bn);
 
-    const updatedWeddingSettings: WeddingSettings = {
+    const prevGroomNick = existingSettings.groom?.nickname || 'Rizky';
+    const prevBrideNick = existingSettings.bride?.nickname || 'Siti';
+
+    updatedWeddingSettings = {
       ...existingSettings,
       id: newSlug,
       slug: newSlug,
@@ -2376,32 +2481,58 @@ app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (req,
       title: `The Wedding of ${nextCoupleNames}`,
       groom: {
         ...existingSettings.groom,
-        fullName:
-          existingSettings.groom.fullName === existingSettings.groom.nickname || !existingSettings.groom.fullName
-            ? gn
-            : existingSettings.groom.fullName,
+        fullName: gn,
         nickname: gn,
+        instagram:
+          !existingSettings.groom?.instagram ||
+          existingSettings.groom.instagram === '@rizkypratama' ||
+          existingSettings.groom.instagram === `@${sanitizeSlug(prevGroomNick).replace(/_/g, '')}`
+            ? `@${sanitizeSlug(gn).replace(/_/g, '')}`
+            : existingSettings.groom.instagram
       },
       bride: {
         ...existingSettings.bride,
-        fullName:
-          existingSettings.bride.fullName === existingSettings.bride.nickname || !existingSettings.bride.fullName
-            ? bn
-            : existingSettings.bride.fullName,
+        fullName: bn,
         nickname: bn,
+        instagram:
+          !existingSettings.bride?.instagram ||
+          existingSettings.bride.instagram === '@sitinurhaliza' ||
+          existingSettings.bride.instagram === `@${sanitizeSlug(prevBrideNick).replace(/_/g, '')}`
+            ? `@${sanitizeSlug(bn).replace(/_/g, '')}`
+            : existingSettings.bride.instagram
       },
+      giftAddress: existingSettings.giftAddress
+        ? {
+            ...existingSettings.giftAddress,
+            recipient: nextCoupleNames
+          }
+        : {
+            recipient: nextCoupleNames,
+            phone: '0812-8899-7711',
+            address: 'Jakarta'
+          },
+      bankAccounts: Array.isArray(existingSettings.bankAccounts)
+        ? existingSettings.bankAccounts.map((b, idx) => ({
+            ...b,
+            accountName: idx === 0 ? gn : bn
+          }))
+        : []
     };
+    (updatedWeddingSettings as any).oldSlug = oldSlug || newSlug;
+    (updatedWeddingSettings as any).updatedAt = new Date().toISOString();
 
     weddingsMap.set(newSlug, updatedWeddingSettings);
+    weddingsMap.set('main', updatedWeddingSettings);
+    weddingsMap.set('default', updatedWeddingSettings);
+    weddingSettings = updatedWeddingSettings;
+
     if (oldSlug && oldSlug !== newSlug) {
       weddingsMap.set(oldSlug, updatedWeddingSettings);
-    }
-    if (weddingSettings.slug === oldSlug || weddingSettings.slug === newSlug) {
-      weddingSettings = updatedWeddingSettings;
-      await dbRepo.saveSettings(updatedWeddingSettings, 'main');
-      await dbRepo.saveSettings(updatedWeddingSettings, 'default');
+      await dbRepo.saveSettings(updatedWeddingSettings, oldSlug);
     }
     await dbRepo.saveSettings(updatedWeddingSettings, newSlug);
+    await dbRepo.saveSettings(updatedWeddingSettings, 'main');
+    await dbRepo.saveSettings(updatedWeddingSettings, 'default');
 
     broadcast({
       type: 'SETTINGS_UPDATED',
@@ -2434,6 +2565,7 @@ app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (req,
     success: true, 
     user: targetUser, 
     weddingSlug: targetUser.weddingSlug,
+    settings: updatedWeddingSettings,
     message: 'Data pengelola dan URL undangan berhasil diperbarui!' 
   });
 });
@@ -2710,13 +2842,23 @@ async function initDatabaseData() {
       for (const w of allWeddings) {
         if (w.id && w.data && w.data.groom?.fullName) {
           weddingsMap.set(w.id, w.data);
-          if (w.data.slug && (w.id === w.data.slug || !weddingsMap.has(w.data.slug))) {
-            weddingsMap.set(w.data.slug, w.data);
+          if (w.data.slug) {
+            weddingsMap.set(sanitizeSlug(w.data.slug), w.data);
+          }
+          const wOldSlug = (w.data as any).oldSlug ? sanitizeSlug((w.data as any).oldSlug) : '';
+          if (wOldSlug && wOldSlug !== 'main' && wOldSlug !== 'default') {
+            weddingsMap.set(wOldSlug, w.data);
           }
         }
       }
+      // Since allWeddings is ordered by updatedAt ASC, the last entry is the most recently modified wedding
+      const latestWeddingEntry = allWeddings[allWeddings.length - 1];
       const mainFromMap = weddingsMap.get('main');
-      if (mainFromMap && mainFromMap.groom?.fullName) {
+      if (latestWeddingEntry?.data?.groom?.fullName) {
+        weddingSettings = latestWeddingEntry.data;
+        weddingsMap.set('main', weddingSettings);
+        weddingsMap.set('default', weddingSettings);
+      } else if (mainFromMap && mainFromMap.groom?.fullName) {
         const latestForMainSlug = mainFromMap.slug ? weddingsMap.get(mainFromMap.slug) : undefined;
         weddingSettings = latestForMainSlug || mainFromMap;
         weddingsMap.set('main', weddingSettings);

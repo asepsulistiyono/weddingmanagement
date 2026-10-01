@@ -38,9 +38,11 @@ import {
   isOwnerAccountCheck,
 } from '../../context/AuthContext.tsx';
 import { generateWeddingSlug, sanitizeSlug, getFullInvitationUrl } from '../../utils/slugHelper.ts';
+import { useRealtime } from '../../context/RealtimeContext.tsx';
 
 export const AdminUsersTab: React.FC = () => {
   const { user: currentUser, isOwner } = useAuth();
+  const { updateSettingsDirectly, refreshData } = useRealtime();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -334,8 +336,8 @@ export const AdminUsersTab: React.FC = () => {
     const bn = coupleParts[1]?.trim() || '';
     setEditGroomName(gn);
     setEditBrideName(bn);
-    setEditWeddingSlug(user.weddingSlug || '');
-    setEditIsSlugManual(Boolean(user.weddingSlug));
+    setEditWeddingSlug(user.weddingSlug || generateWeddingSlug(gn, bn));
+    setEditIsSlugManual(false);
     setEditPhone(user.phone || '');
     setEditNotes(user.notes || '');
     setEditError(null);
@@ -349,18 +351,24 @@ export const AdminUsersTab: React.FC = () => {
     setEditLoading(true);
     setEditError(null);
 
-    const finalSlug = editWeddingSlug ? sanitizeSlug(editWeddingSlug) : targetUserToEdit.weddingSlug;
+    const gnClean = editGroomName.trim();
+    const bnClean = editBrideName.trim();
+    const finalSlug = editWeddingSlug
+      ? sanitizeSlug(editWeddingSlug)
+      : gnClean || bnClean
+      ? generateWeddingSlug(gnClean, bnClean)
+      : targetUserToEdit.weddingSlug;
     const updatedName =
-      editGroomName.trim() && editBrideName.trim()
-        ? `${editGroomName.trim()} & ${editBrideName.trim()}`
+      gnClean && bnClean
+        ? `${gnClean} & ${bnClean}`
         : targetUserToEdit.name;
 
     const updatedUser: AdminUser = {
       ...targetUserToEdit,
       name: updatedName,
       coupleNames:
-        editGroomName.trim() && editBrideName.trim()
-          ? `${editGroomName.trim()} & ${editBrideName.trim()}`
+        gnClean && bnClean
+          ? `${gnClean} & ${bnClean}`
           : targetUserToEdit.coupleNames,
       weddingSlug: finalSlug,
       phone: editPhone.trim() || undefined,
@@ -369,6 +377,7 @@ export const AdminUsersTab: React.FC = () => {
 
     saveCachedAdminUser(updatedUser);
     setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
+    window.dispatchEvent(new Event('admins-updated'));
     setSuccessMsg(`Data ${updatedUser.name} dan URL undangan berhasil diperbarui!`);
     setIsEditModalOpen(false);
     setTargetUserToEdit(null);
@@ -376,19 +385,28 @@ export const AdminUsersTab: React.FC = () => {
     setTimeout(() => setSuccessMsg(null), 4000);
 
     try {
-      await fetch(`/api/superadmin/users/${targetUserToEdit.id}`, {
+      const res = await fetch(`/api/superadmin/users/${targetUserToEdit.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          groomName: editGroomName.trim(),
-          brideName: editBrideName.trim(),
+          username: targetUserToEdit.username,
+          oldSlug: targetUserToEdit.weddingSlug,
+          groomName: gnClean,
+          brideName: bnClean,
           weddingSlug: finalSlug,
           name: updatedName,
           phone: editPhone.trim(),
           notes: editNotes.trim()
         })
       });
-      fetchUsers();
+      if (res.ok) {
+        const data = await res.json();
+        if (data.settings) {
+          updateSettingsDirectly(data.settings, false);
+        }
+      }
+      await fetchUsers();
+      await refreshData();
     } catch {
       // already saved in local cache & state
     }
