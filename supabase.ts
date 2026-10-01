@@ -84,12 +84,15 @@ const candidateUrls: string[] = [
 export const supabaseUrl: string = candidateUrls.find(isValidSupabaseUrl) || '';
 
 const candidateKeys: string[] = [
-  typeof import.meta !== 'undefined' ? cleanEnvValue(import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY) : '',
+  typeof process !== 'undefined' ? cleanEnvValue(process.env?.VITE_SUPABASE_SERVICE_ROLE_KEY) : '',
+  typeof process !== 'undefined' ? cleanEnvValue(process.env?.SUPABASE_SERVICE_ROLE_KEY) : '',
+  typeof process !== 'undefined' ? cleanEnvValue(process.env?.SUPABASE_SECRET_KEY) : '',
+  typeof import.meta !== 'undefined' ? cleanEnvValue(import.meta.env?.VITE_SUPABASE_SERVICE_ROLE_KEY) : '',
   typeof import.meta !== 'undefined' ? cleanEnvValue(import.meta.env?.VITE_SUPABASE_ANON_KEY) : '',
-  typeof process !== 'undefined' ? cleanEnvValue(process.env?.VITE_SUPABASE_PUBLISHABLE_KEY) : '',
   typeof process !== 'undefined' ? cleanEnvValue(process.env?.VITE_SUPABASE_ANON_KEY) : '',
   typeof process !== 'undefined' ? cleanEnvValue(process.env?.SUPABASE_ANON_KEY) : '',
-  typeof process !== 'undefined' ? cleanEnvValue(process.env?.SUPABASE_SERVICE_ROLE_KEY) : '',
+  typeof import.meta !== 'undefined' ? cleanEnvValue(import.meta.env?.VITE_SUPABASE_PUBLISHABLE_KEY) : '',
+  typeof process !== 'undefined' ? cleanEnvValue(process.env?.VITE_SUPABASE_PUBLISHABLE_KEY) : '',
 ];
 
 const resolvedKey: string =

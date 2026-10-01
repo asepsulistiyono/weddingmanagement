@@ -58,8 +58,9 @@ function handleSupabaseError(err: any) {
 }
 
 export const SUPABASE_SCHEMA_SQL = `-- ============================================================================
--- SCRIPT SQL SUPABASE EKSTERNAL LENGKAP (5 Tabel + RLS + GRANT Hak Akses API)
--- Jalankan seluruh script ini di menu SQL Editor pada Dashboard Supabase Anda
+-- SCRIPT SQL SUPABASE EKSTERNAL LENGKAP (5 Tabel + GRANT Hak Akses API)
+-- Jalankan seluruh script ini di menu SQL Editor pada Dashboard Supabase Anda:
+-- https://supabase.com/dashboard/project/aksqfqromigvrkklhjhw/sql/new
 -- ============================================================================
 
 -- 1. Tabel Pengaturan Undangan & Multi-Tenant Mempelai (wedding_settings)
@@ -805,7 +806,7 @@ export async function createDbUser(user: {
   createdBy?: string;
   createdByName?: string;
 }): Promise<void> {
-  if (canUseSupabase()) {
+  if (isSupabaseReady()) {
     try {
       const { error } = await supabase
         .from('users')

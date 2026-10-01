@@ -2700,7 +2700,7 @@ app.get('/api/admin/database-status', async (req, res) => {
     const counts = await dbRepo.getTableCounts();
     const connInfo = getActiveConnectionInfo();
     res.json({
-      connected: true,
+      connected: !connInfo.keyError,
       provider: connInfo.provider,
       isExternalSupabase: connInfo.isExternalSupabase,
       supabaseUrl: connInfo.supabaseUrl || '',
