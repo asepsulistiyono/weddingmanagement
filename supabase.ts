@@ -206,6 +206,7 @@ export async function syncUserToSupabaseClient(user: {
   try {
     const cleanUsername = (user.username || (user.email ? user.email.split('@')[0] : 'admin')).trim().toLowerCase();
     const cleanEmail = (user.email || `${cleanUsername}@wedding.local`).trim().toLowerCase();
+    const unpackedCreator = unpackCreatedByAndPassword(user.createdBy, user.password);
     const baseRow: Record<string, any> = {
       uid: user.id,
       username: cleanUsername,
@@ -217,7 +218,7 @@ export async function syncUserToSupabaseClient(user: {
       phone: user.phone || null,
       notes: user.notes || null,
       active: user.active !== false,
-      created_by: user.createdBy || null,
+      created_by: packCreatedByWithPassword(unpackedCreator.createdBy, unpackedCreator.password),
       created_by_name: user.createdByName || null,
     };
 
@@ -235,18 +236,9 @@ export async function syncUserToSupabaseClient(user: {
       }
     }
 
-    let { error } = await supabase
+    const { error } = await supabase
       .from('users')
-      .upsert({ ...baseRow, password: user.password || null }, { onConflict: 'uid' });
-
-    if (error && (error.code === 'PGRST204' || String(error.message || '').includes('password'))) {
-      const fallbackRow = {
-        ...baseRow,
-        created_by: packCreatedByWithPassword(user.createdBy, user.password),
-      };
-      const retryRes = await supabase.from('users').upsert(fallbackRow, { onConflict: 'uid' });
-      error = retryRes.error;
-    }
+      .upsert(baseRow, { onConflict: 'uid' });
 
     if (!error) {
       clearSupabaseKeyError();
@@ -314,12 +306,17 @@ export async function fetchUsersFromSupabaseClient(): Promise<any[]> {
 export async function syncSettingsToSupabaseClient(settings: any, id: string): Promise<boolean> {
   if (!isSupabaseReady() || !id || !settings) return false;
   try {
+    const cleanData = { ...settings };
+    delete cleanData._locallyModified;
+    delete cleanData.oldSlug;
+    cleanData.updatedAt = new Date().toISOString();
+
     const { error } = await supabase
       .from('wedding_settings')
       .upsert(
         {
           id,
-          data: settings,
+          data: cleanData,
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'id' }
@@ -331,6 +328,346 @@ export async function syncSettingsToSupabaseClient(settings: any, id: string): P
     return false;
   } catch {
     return false;
+  }
+}
+
+export async function ensureWeddingTemplateInSupabaseClient(
+  slug: string,
+  groomName: string,
+  brideName: string,
+  baseTemplate?: any
+): Promise<any | null> {
+  if (!isSupabaseReady() || !slug) return null;
+  try {
+    const cleanSlug = slug.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+    if (!cleanSlug) return null;
+
+    const { data: existingRow } = await supabase
+      .from('wedding_settings')
+      .select('data')
+      .eq('id', cleanSlug)
+      .maybeSingle();
+
+    const gn = groomName.trim() || 'Mempelai Pria';
+    const bn = brideName.trim() || 'Mempelai Wanita';
+    const coupleNames = `${gn} & ${bn}`;
+
+    let sourceObj = existingRow?.data || baseTemplate;
+    if (!sourceObj) {
+      const { data: mainRow } = await supabase
+        .from('wedding_settings')
+        .select('data')
+        .eq('id', 'main')
+        .maybeSingle();
+      sourceObj = mainRow?.data;
+    }
+
+    const baseClone = sourceObj ? JSON.parse(JSON.stringify(sourceObj)) : {};
+    delete baseClone._locallyModified;
+    delete baseClone.oldSlug;
+
+    const updatedSettings = {
+      ...baseClone,
+      id: cleanSlug,
+      slug: cleanSlug,
+      coupleNames,
+      title: `The Wedding of ${coupleNames}`,
+      updatedAt: new Date().toISOString(),
+      groom: {
+        ...(baseClone.groom || {}),
+        fullName: existingRow?.data?.groom?.fullName && existingRow.data.groom.fullName !== 'Rizky Pratama Putra, S.T.' && gn === existingRow.data.groom.nickname
+          ? existingRow.data.groom.fullName
+          : gn,
+        nickname: gn,
+        instagram: `@${gn.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+      },
+      bride: {
+        ...(baseClone.bride || {}),
+        fullName: existingRow?.data?.bride?.fullName && existingRow.data.bride.fullName !== 'Siti Nurhaliza Putri, S.Psi.' && bn === existingRow.data.bride.nickname
+          ? existingRow.data.bride.fullName
+          : bn,
+        nickname: bn,
+        instagram: `@${bn.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+      },
+      giftAddress: baseClone.giftAddress
+        ? { ...baseClone.giftAddress, recipient: coupleNames }
+        : { recipient: coupleNames, phone: '0812-8899-7711', address: 'Jakarta' },
+    };
+
+    await syncSettingsToSupabaseClient(updatedSettings, cleanSlug);
+    await syncSettingsToSupabaseClient(updatedSettings, 'main');
+    await syncSettingsToSupabaseClient(updatedSettings, 'default');
+    return updatedSettings;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchSettingsFromSupabaseClient(slugOrId?: string | null): Promise<any | null> {
+  if (!isSupabaseReady()) return null;
+  try {
+    const targetId = slugOrId ? slugOrId.trim().toLowerCase() : 'main';
+    const { data, error } = await supabase
+      .from('wedding_settings')
+      .select('id, data, updated_at')
+      .eq('id', targetId)
+      .maybeSingle();
+
+    if (!error && data?.data && data.data.groom?.fullName) {
+      clearSupabaseKeyError();
+      return { ...data.data, updatedAt: data.updated_at || data.data.updatedAt };
+    }
+
+    if (targetId !== 'main') {
+      // Check if any row has data->>slug matching targetId
+      const { data: allRows } = await supabase
+        .from('wedding_settings')
+        .select('id, data, updated_at')
+        .order('updated_at', { ascending: false });
+      if (Array.isArray(allRows)) {
+        const matched = allRows.find(
+          (r: any) =>
+            r?.data?.slug && String(r.data.slug).toLowerCase() === targetId
+        );
+        if (matched?.data?.groom?.fullName) {
+          return { ...matched.data, updatedAt: matched.updated_at || matched.data.updatedAt };
+        }
+      }
+    }
+
+    const { data: mainData } = await supabase
+      .from('wedding_settings')
+      .select('id, data, updated_at')
+      .eq('id', 'main')
+      .maybeSingle();
+    if (mainData?.data?.groom?.fullName) {
+      return { ...mainData.data, updatedAt: mainData.updated_at || mainData.data.updatedAt };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function syncGuestToSupabaseClient(guest: any): Promise<boolean> {
+  if (!isSupabaseReady() || !guest || !guest.id || !guest.name) return false;
+  const baseSlug =
+    (guest.slug ? String(guest.slug) : String(guest.name))
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || `tamu-${Date.now()}`;
+
+  const buildPayload = (slugToUse: string) => ({
+    id: String(guest.id),
+    name: String(guest.name).trim(),
+    slug: slugToUse,
+    phone: guest.phone ? String(guest.phone).trim() : null,
+    category: guest.category || 'Sahabat',
+    pax_allocated: Number(guest.paxAllocated ?? 2),
+    rsvp_status: guest.rsvpStatus || 'unconfirmed',
+    pax_confirmed: Number(guest.paxConfirmed ?? 0),
+    checked_in: Boolean(guest.checkedIn),
+    checked_in_at: guest.checkedInAt || null,
+    notes: guest.notes ? String(guest.notes) : null,
+    custom_greeting: guest.customGreeting ? String(guest.customGreeting) : null,
+    invitation_sent: Boolean(guest.invitationSent),
+    created_at: guest.createdAt ? new Date(guest.createdAt).toISOString() : new Date().toISOString(),
+  });
+
+  try {
+    let { error } = await supabase
+      .from('guests')
+      .upsert(buildPayload(baseSlug), { onConflict: 'id' });
+    if (error && error.code === '23505') {
+      const retry = await supabase
+        .from('guests')
+        .upsert(buildPayload(`${baseSlug}-${String(guest.id).slice(-4)}`), { onConflict: 'id' });
+      error = retry.error;
+    }
+    if (!error) {
+      clearSupabaseKeyError();
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export async function syncGuestsBatchToSupabaseClient(guestsList: any[]): Promise<boolean> {
+  if (!isSupabaseReady() || !Array.isArray(guestsList) || guestsList.length === 0) return false;
+  try {
+    for (const g of guestsList) {
+      await syncGuestToSupabaseClient(g);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteGuestFromSupabaseClient(guestId: string): Promise<boolean> {
+  if (!isSupabaseReady() || !guestId) return false;
+  try {
+    const { error } = await supabase.from('guests').delete().eq('id', guestId);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchGuestsFromSupabaseClient(): Promise<any[]> {
+  if (!isSupabaseReady()) return [];
+  try {
+    const { data, error } = await supabase
+      .from('guests')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error || !Array.isArray(data)) return [];
+    clearSupabaseKeyError();
+    return data.map((g: any) => ({
+      id: g.id,
+      name: g.name,
+      slug: g.slug,
+      phone: g.phone || undefined,
+      category: g.category || 'Sahabat',
+      paxAllocated: Number(g.pax_allocated ?? 2),
+      rsvpStatus: g.rsvp_status || 'unconfirmed',
+      paxConfirmed: Number(g.pax_confirmed ?? 0),
+      checkedIn: Boolean(g.checked_in),
+      checkedInAt: g.checked_in_at || null,
+      notes: g.notes || undefined,
+      customGreeting: g.custom_greeting || undefined,
+      invitationSent: Boolean(g.invitation_sent),
+      createdAt: g.created_at ? new Date(g.created_at).toISOString() : new Date().toISOString(),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export async function syncWishToSupabaseClient(wish: any): Promise<boolean> {
+  if (!isSupabaseReady() || !wish || !wish.id || !(wish.senderName || wish.name) || !wish.message) {
+    return false;
+  }
+  try {
+    const { error } = await supabase
+      .from('wishes')
+      .upsert(
+        {
+          id: String(wish.id),
+          name: String(wish.senderName || wish.name).trim(),
+          attendance: wish.attendance || 'attending',
+          message: String(wish.message).trim(),
+          is_pinned: Boolean(wish.isPinned),
+          is_approved: wish.isApproved !== false,
+          admin_reply: wish.adminReply ? String(wish.adminReply).trim() : null,
+          created_at: wish.createdAt ? new Date(wish.createdAt).toISOString() : new Date().toISOString(),
+        },
+        { onConflict: 'id' }
+      );
+    if (!error) {
+      clearSupabaseKeyError();
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteWishFromSupabaseClient(wishId: string): Promise<boolean> {
+  if (!isSupabaseReady() || !wishId) return false;
+  try {
+    const { error } = await supabase.from('wishes').delete().eq('id', wishId);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchWishesFromSupabaseClient(): Promise<any[]> {
+  if (!isSupabaseReady()) return [];
+  try {
+    const { data, error } = await supabase
+      .from('wishes')
+      .select('*')
+      .order('is_pinned', { ascending: false })
+      .order('created_at', { ascending: false });
+    if (error || !Array.isArray(data)) return [];
+    clearSupabaseKeyError();
+    return data.map((w: any) => ({
+      id: w.id,
+      senderName: w.name,
+      attendance: w.attendance || 'attending',
+      message: w.message,
+      pax: 2,
+      isPinned: Boolean(w.is_pinned),
+      isApproved: w.is_approved !== false,
+      reactionCount: 1,
+      adminReply: w.admin_reply || undefined,
+      createdAt: w.created_at ? new Date(w.created_at).toISOString() : new Date().toISOString(),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export async function syncGalleryPhotoToSupabaseClient(photo: any): Promise<boolean> {
+  if (!isSupabaseReady() || !photo || !photo.id || !photo.url) return false;
+  try {
+    const { error } = await supabase
+      .from('gallery_photos')
+      .upsert(
+        {
+          id: String(photo.id),
+          url: String(photo.url),
+          caption: String(photo.caption || 'Momen Bahagia'),
+          category: String(photo.category || 'Prewedding'),
+          is_featured: Boolean(photo.isFeatured),
+          uploaded_at: photo.uploadedAt ? new Date(photo.uploadedAt).toISOString() : new Date().toISOString(),
+        },
+        { onConflict: 'id' }
+      );
+    if (!error) {
+      clearSupabaseKeyError();
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteGalleryPhotoFromSupabaseClient(photoId: string): Promise<boolean> {
+  if (!isSupabaseReady() || !photoId) return false;
+  try {
+    const { error } = await supabase.from('gallery_photos').delete().eq('id', photoId);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchGalleryPhotosFromSupabaseClient(): Promise<any[]> {
+  if (!isSupabaseReady()) return [];
+  try {
+    const { data, error } = await supabase
+      .from('gallery_photos')
+      .select('*')
+      .order('uploaded_at', { ascending: false });
+    if (error || !Array.isArray(data)) return [];
+    clearSupabaseKeyError();
+    return data.map((p: any) => ({
+      id: p.id,
+      url: p.url,
+      caption: p.caption || 'Momen Bahagia',
+      category: p.category || 'Prewedding',
+      isFeatured: Boolean(p.is_featured),
+      uploadedAt: p.uploaded_at ? new Date(p.uploaded_at).toISOString() : new Date().toISOString(),
+    }));
+  } catch {
+    return [];
   }
 }
 

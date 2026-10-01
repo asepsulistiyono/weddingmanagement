@@ -289,7 +289,13 @@ export async function getAllWeddings(): Promise<Array<{ id: string; data: Weddin
     }
   }
 
-  return Array.from(byId.entries()).map(([id, val]) => ({ id, data: val.data, updatedAt: val.updatedAt }));
+  const list = Array.from(byId.entries()).map(([id, val]) => ({ id, data: val.data, updatedAt: val.updatedAt }));
+  list.sort((a, b) => {
+    const tA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+    const tB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+    return tA - tB;
+  });
+  return list;
 }
 
 // ----------------- GUESTS -----------------
@@ -821,6 +827,7 @@ export async function createDbUser(user: {
   if (isSupabaseReady()) {
     try {
       const cleanUsername = user.username || user.email.split('@')[0];
+      const unpacked = unpackCreatedByAndPassword(user.createdBy, user.password);
       const baseRow: Record<string, any> = {
         uid: user.uid,
         username: cleanUsername,
@@ -832,7 +839,7 @@ export async function createDbUser(user: {
         phone: user.phone || null,
         notes: user.notes || null,
         active: user.active !== false,
-        created_by: user.createdBy || null,
+        created_by: packCreatedByWithPassword(unpacked.createdBy, unpacked.password),
         created_by_name: user.createdByName || null
       };
 
@@ -851,23 +858,9 @@ export async function createDbUser(user: {
         }
       }
 
-      let { error } = await supabase
+      const { error } = await supabase
         .from('users')
-        .upsert({ ...baseRow, password: user.password || null }, { onConflict: 'uid' });
-
-      // If the user's Supabase users table does not have a 'password' column (PGRST204), upsert with password packed in created_by
-      if (error && (error.code === 'PGRST204' || String(error.message || '').includes('password'))) {
-        const retryRes = await supabase
-          .from('users')
-          .upsert(
-            {
-              ...baseRow,
-              created_by: packCreatedByWithPassword(user.createdBy, user.password),
-            },
-            { onConflict: 'uid' }
-          );
-        error = retryRes.error;
-      }
+        .upsert(baseRow, { onConflict: 'uid' });
 
       if (error) handleSupabaseError(error);
       else clearSupabaseKeyError();

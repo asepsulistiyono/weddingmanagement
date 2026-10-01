@@ -44,11 +44,12 @@ import {
   deleteUserFromSupabaseClient,
   fetchUsersFromSupabaseClient,
   syncSettingsToSupabaseClient,
+  ensureWeddingTemplateInSupabaseClient,
 } from '../../lib/supabase.ts';
 
 export const AdminUsersTab: React.FC = () => {
   const { user: currentUser, isOwner } = useAuth();
-  const { updateSettingsDirectly, refreshData } = useRealtime();
+  const { settings, updateSettingsDirectly, refreshData } = useRealtime();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -403,6 +404,13 @@ export const AdminUsersTab: React.FC = () => {
 
     saveCachedAdminUser(updatedUser);
     syncUserToSupabaseClient(updatedUser).catch(() => {});
+    if (updatedUser.role === 'super_admin' && finalSlug && (gnClean || bnClean)) {
+      ensureWeddingTemplateInSupabaseClient(finalSlug, gnClean, bnClean, settings)
+        .then((tpl) => {
+          if (tpl) updateSettingsDirectly(tpl, false);
+        })
+        .catch(() => {});
+    }
     setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
     window.dispatchEvent(new Event('admins-updated'));
     setSuccessMsg(`Data ${updatedUser.name} dan URL undangan berhasil diperbarui!`);
@@ -540,6 +548,19 @@ export const AdminUsersTab: React.FC = () => {
       await syncUserToSupabaseClient(fullUser);
       if (createdSettings && resolvedSlug) {
         await syncSettingsToSupabaseClient(createdSettings, resolvedSlug);
+        await syncSettingsToSupabaseClient(createdSettings, 'main');
+        await syncSettingsToSupabaseClient(createdSettings, 'default');
+        updateSettingsDirectly(createdSettings, false);
+      } else if (role === 'super_admin' && resolvedSlug) {
+        const tpl = await ensureWeddingTemplateInSupabaseClient(
+          resolvedSlug,
+          resolvedGroom || finalName,
+          resolvedBride || '',
+          settings
+        );
+        if (tpl) {
+          updateSettingsDirectly(tpl, false);
+        }
       }
       setUsers((prev) => [
         fullUser,

@@ -16,8 +16,14 @@ import {
   supabaseUrl,
   fetchDirectSupabaseStatus,
   syncUserToSupabaseClient,
+  syncSettingsToSupabaseClient,
+  ensureWeddingTemplateInSupabaseClient,
+  syncGuestToSupabaseClient,
+  syncWishToSupabaseClient,
+  syncGalleryPhotoToSupabaseClient,
 } from '../../lib/supabase.ts';
 import { getCachedAdminsList } from '../../context/AuthContext.tsx';
+import { useRealtime } from '../../context/RealtimeContext.tsx';
 
 interface TableCounts {
   wedding_settings: number;
@@ -152,6 +158,7 @@ BEGIN
 END $$;`;
 
 export const DatabaseSettingsTab: React.FC = () => {
+  const { settings, guests, wishes, refreshAll } = useRealtime();
   const defaultHost = (() => {
     try {
       return supabaseUrl ? new URL(supabaseUrl).host : 'aksqfqromigvrkklhjhw.supabase.co';
@@ -249,29 +256,74 @@ export const DatabaseSettingsTab: React.FC = () => {
     setSyncing(true);
     setFeedback(null);
     try {
-      // Push all local cached admins directly to Supabase first
+      // 1. Push all local cached admins & their wedding templates directly to Supabase
       const cachedAdmins = getCachedAdminsList();
       for (const admin of cachedAdmins) {
         await syncUserToSupabaseClient(admin);
+        if (admin.role === 'super_admin' && admin.weddingSlug) {
+          const parts = String(admin.coupleNames || admin.name || '').split('&');
+          const gn = parts[0]?.trim() || admin.username.split('_')[0] || 'Mempelai Pria';
+          const bn = parts[1]?.trim() || admin.username.split('_').slice(1).join(' ') || 'Mempelai Wanita';
+          await ensureWeddingTemplateInSupabaseClient(admin.weddingSlug, gn, bn, settings);
+        }
       }
 
+      // 2. Push current active settings & all cached settings in localStorage directly to Supabase
+      if (settings) {
+        const activeSlug = settings.slug || 'main';
+        await syncSettingsToSupabaseClient(settings, activeSlug);
+        await syncSettingsToSupabaseClient(settings, 'main');
+        await syncSettingsToSupabaseClient(settings, 'default');
+        if (Array.isArray(settings.galleries)) {
+          for (const gal of settings.galleries) {
+            if (gal && gal.id && gal.url) {
+              await syncGalleryPhotoToSupabaseClient(gal);
+            }
+          }
+        }
+      }
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('wedding_settings_cache_')) {
+          const slug = key.replace('wedding_settings_cache_', '');
+          const raw = localStorage.getItem(key);
+          if (!raw) continue;
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.groom?.fullName) {
+              await syncSettingsToSupabaseClient(parsed, parsed.slug || slug);
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      // 3. Push all guests & wishes in state directly to Supabase
+      for (const g of guests) {
+        await syncGuestToSupabaseClient(g);
+      }
+      for (const w of wishes) {
+        await syncWishToSupabaseClient(w);
+      }
+
+      // 4. Also trigger backend database sync & refresh
       const res = await fetch('/api/admin/database-sync', { method: 'POST' }).catch(() => null);
-      if (res && res.ok) {
+      await refreshAll();
+      const directStatus = await fetchDirectSupabaseStatus();
+      if (directStatus && directStatus.connected) {
+        const c = directStatus.tableCounts;
+        setFeedback({
+          type: 'success',
+          message: `Seluruh data undangan (${c.wedding_settings} URL), buku tamu (${c.guests} tamu), ucapan (${c.wishes}), galeri (${c.gallery_photos} foto), dan akun pengelola (${c.users} akun) berhasil disinkronkan langsung ke proyek Supabase (${directStatus.host})!`,
+        });
+        await fetchStatus();
+      } else if (res && res.ok) {
         const data = await res.json();
         setFeedback({ type: 'success', message: data.message });
         await fetchStatus();
       } else {
-        const directStatus = await fetchDirectSupabaseStatus();
-        if (directStatus && directStatus.connected) {
-          const c = directStatus.tableCounts;
-          setFeedback({
-            type: 'success',
-            message: `Seluruh data undangan (${c.wedding_settings} URL), buku tamu (${c.guests} tamu), ucapan (${c.wishes}), galeri (${c.gallery_photos} foto), dan akun pengelola (${c.users} akun) berhasil disinkronkan langsung ke proyek Supabase (${directStatus.host})!`,
-          });
-          await fetchStatus();
-        } else {
-          setFeedback({ type: 'error', message: 'Gagal menyinkronkan data ke Supabase.' });
-        }
+        setFeedback({ type: 'error', message: 'Gagal menyinkronkan data ke Supabase.' });
       }
     } catch {
       setFeedback({ type: 'error', message: 'Terjadi kesalahan jaringan saat sinkronisasi.' });

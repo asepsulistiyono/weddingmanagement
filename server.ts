@@ -2846,29 +2846,30 @@ async function initDatabaseData() {
 
     if (Array.isArray(allWeddings) && allWeddings.length > 0) {
       for (const w of allWeddings) {
-        if (w.id && w.data && w.data.groom?.fullName) {
-          weddingsMap.set(w.id, w.data);
-          if (w.data.slug) {
-            weddingsMap.set(sanitizeSlug(w.data.slug), w.data);
-          }
-          const wOldSlug = (w.data as any).oldSlug ? sanitizeSlug((w.data as any).oldSlug) : '';
-          if (wOldSlug && wOldSlug !== 'main' && wOldSlug !== 'default') {
-            weddingsMap.set(wOldSlug, w.data);
-          }
+        if (!w.id || !w.data || !w.data.groom?.fullName) continue;
+        if (w.id.includes('test') || String(w.data.slug || '').includes('test')) continue;
+        delete (w.data as any).oldSlug;
+        weddingsMap.set(w.id, w.data);
+        if (w.data.slug && w.id !== 'main' && w.id !== 'default') {
+          weddingsMap.set(sanitizeSlug(w.data.slug), w.data);
         }
       }
-      // Since allWeddings is ordered by updatedAt ASC, the last entry is the most recently modified wedding
-      const latestWeddingEntry = allWeddings[allWeddings.length - 1];
       const mainFromMap = weddingsMap.get('main');
-      if (latestWeddingEntry?.data?.groom?.fullName) {
-        weddingSettings = latestWeddingEntry.data;
-        weddingsMap.set('main', weddingSettings);
-        weddingsMap.set('default', weddingSettings);
-      } else if (mainFromMap && mainFromMap.groom?.fullName) {
+      if (mainFromMap && mainFromMap.groom?.fullName && !String(mainFromMap.slug || '').includes('test')) {
         const latestForMainSlug = mainFromMap.slug ? weddingsMap.get(mainFromMap.slug) : undefined;
         weddingSettings = latestForMainSlug || mainFromMap;
         weddingsMap.set('main', weddingSettings);
         weddingsMap.set('default', weddingSettings);
+      } else {
+        const validWeddings = allWeddings.filter(
+          (w) => w.id !== 'main' && w.id !== 'default' && !w.id.includes('test') && !String(w.data?.slug || '').includes('test')
+        );
+        const latestWeddingEntry = validWeddings[validWeddings.length - 1];
+        if (latestWeddingEntry?.data?.groom?.fullName) {
+          weddingSettings = latestWeddingEntry.data;
+          weddingsMap.set('main', weddingSettings);
+          weddingsMap.set('default', weddingSettings);
+        }
       }
     }
 

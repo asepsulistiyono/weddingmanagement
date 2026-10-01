@@ -2,6 +2,26 @@ import React, { createContext, useContext, useEffect, useState, useRef, useCallb
 import type { Wish, WeddingSettings, RealtimeMessage, Guest, GalleryPhoto } from '../types.ts';
 import { parseWeddingAndGuestFromUrl } from '../utils/slugHelper.ts';
 import { replaceCachedAdminsFromServer } from './AuthContext.tsx';
+import {
+  supabase,
+  isSupabaseReady,
+  syncUserToSupabaseClient,
+  deleteUserFromSupabaseClient,
+  fetchUsersFromSupabaseClient,
+  syncSettingsToSupabaseClient,
+  ensureWeddingTemplateInSupabaseClient,
+  fetchSettingsFromSupabaseClient,
+  syncGuestToSupabaseClient,
+  syncGuestsBatchToSupabaseClient,
+  deleteGuestFromSupabaseClient,
+  fetchGuestsFromSupabaseClient,
+  syncWishToSupabaseClient,
+  deleteWishFromSupabaseClient,
+  fetchWishesFromSupabaseClient,
+  syncGalleryPhotoToSupabaseClient,
+  deleteGalleryPhotoFromSupabaseClient,
+  fetchGalleryPhotosFromSupabaseClient,
+} from '../lib/supabase.ts';
 
 interface RealtimeContextType {
   wishes: Wish[];
@@ -414,11 +434,20 @@ async function pushLocalCacheToServer(): Promise<void> {
       // ignore
     }
 
-    const cachedGuests = loadCachedGuests().filter((g) => Boolean((g as any)._locallyModified));
-    const cachedWishes = loadCachedWishes().filter((w) => Boolean((w as any)._locallyModified));
+    const defaultGuestIds = new Set(['g-1', 'g-2', 'g-3', 'g-4', 'g-5', 'g-6']);
+    const defaultWishIds = new Set(['w-1', 'w-2', 'w-3', 'w-4']);
     const deletedGuestIds = Array.from(getDeletedIds(DELETED_GUESTS_KEY));
     const deletedWishIds = Array.from(getDeletedIds(DELETED_WISHES_KEY));
     const deletedAdminIds = Array.from(getDeletedIds('wedding_deleted_admins'));
+
+    const allCachedGuests = loadCachedGuests();
+    const cachedGuests = allCachedGuests.filter(
+      (g) => g && g.id && (Boolean((g as any)._locallyModified) || !defaultGuestIds.has(g.id))
+    );
+    const allCachedWishes = loadCachedWishes();
+    const cachedWishes = allCachedWishes.filter(
+      (w) => w && w.id && (Boolean((w as any)._locallyModified) || !defaultWishIds.has(w.id))
+    );
 
     const hasPendingChanges =
       settingsList.length > 0 ||
@@ -433,13 +462,87 @@ async function pushLocalCacheToServer(): Promise<void> {
       return;
     }
 
+    // 1. Push directly from browser to Supabase so data is 100% persisted in Supabase even if backend is offline
+    if (isSupabaseReady()) {
+      for (const delGId of deletedGuestIds) {
+        await deleteGuestFromSupabaseClient(delGId);
+      }
+      for (const delWId of deletedWishIds) {
+        await deleteWishFromSupabaseClient(delWId);
+      }
+      for (const delAId of deletedAdminIds) {
+        await deleteUserFromSupabaseClient(delAId, delAId);
+      }
+      for (const item of settingsList) {
+        const sSlug = item.settings.slug || item.slug || 'main';
+        await syncSettingsToSupabaseClient(item.settings, sSlug);
+        await syncSettingsToSupabaseClient(item.settings, 'main');
+        await syncSettingsToSupabaseClient(item.settings, 'default');
+        if (Array.isArray(item.settings.galleries)) {
+          for (const gal of item.settings.galleries) {
+            if (gal && gal.id && gal.url && !gal.id.startsWith('gal-1') && !gal.id.startsWith('gal-2')) {
+              await syncGalleryPhotoToSupabaseClient(gal);
+            }
+          }
+        }
+      }
+      for (const g of cachedGuests) {
+        await syncGuestToSupabaseClient(g);
+      }
+      for (const w of cachedWishes) {
+        await syncWishToSupabaseClient(w);
+      }
+      for (const a of cachedAdmins) {
+        await syncUserToSupabaseClient(a);
+        if (a.role === 'super_admin' && a.weddingSlug && a._locallyModified) {
+          const parts = String(a.coupleNames || a.name || '').split('&');
+          const gn = parts[0]?.trim() || a.username.split('_')[0] || 'Mempelai Pria';
+          const bn = parts[1]?.trim() || a.username.split('_').slice(1).join(' ') || 'Mempelai Wanita';
+          await ensureWeddingTemplateInSupabaseClient(a.weddingSlug, gn, bn);
+        }
+      }
+    }
+
+    // Clear _locallyModified flags on settings after syncing to Supabase
+    for (const key of syncedSettingsKeys) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          delete parsed._locallyModified;
+          localStorage.setItem(key, JSON.stringify(parsed));
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // Clear _locallyModified flags on guests & wishes
+    if (cachedGuests.some((g) => (g as any)._locallyModified)) {
+      const cleanedGuests = allCachedGuests.map((g) => {
+        const copy = { ...g };
+        delete (copy as any)._locallyModified;
+        return copy;
+      });
+      saveCachedGuests(cleanedGuests);
+    }
+    if (cachedWishes.some((w) => (w as any)._locallyModified)) {
+      const cleanedWishes = allCachedWishes.map((w) => {
+        const copy = { ...w };
+        delete (copy as any)._locallyModified;
+        return copy;
+      });
+      saveCachedWishes(cleanedWishes);
+    }
+
+    // 2. Also sync to backend server
     const res = await fetch('/api/public/sync-state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         settingsList,
-        guests: cachedGuests,
-        wishes: cachedWishes,
+        guests: cachedGuests.map((g) => ({ ...g, _locallyModified: true })),
+        wishes: cachedWishes.map((w) => ({ ...w, _locallyModified: true })),
         admins: cachedAdmins,
         deletedGuestIds,
         deletedWishIds,
@@ -448,19 +551,6 @@ async function pushLocalCacheToServer(): Promise<void> {
     });
 
     if (res.ok) {
-      // Clear _locallyModified flags so stale localStorage never overwrites future database updates
-      for (const key of syncedSettingsKeys) {
-        try {
-          const raw = localStorage.getItem(key);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            delete parsed._locallyModified;
-            localStorage.setItem(key, JSON.stringify(parsed));
-          }
-        } catch {
-          // ignore
-        }
-      }
       try {
         const syncData = await res.json();
         if (Array.isArray(syncData?.admins) && syncData.admins.length > 0) {
@@ -584,15 +674,17 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const upsertGuestDirectly = useCallback((guestItem: Guest) => {
     if (!guestItem || !guestItem.id) return;
     removeDeletedId(DELETED_GUESTS_KEY, guestItem.id);
+    const taggedGuest = { ...guestItem, _locallyModified: true } as Guest;
     setGuests((prev) => {
-      const exists = prev.some((g) => g.id === guestItem.id);
+      const exists = prev.some((g) => g.id === taggedGuest.id);
       const next = exists
-        ? prev.map((g) => (g.id === guestItem.id ? { ...g, ...guestItem } : g))
-        : [guestItem, ...prev];
+        ? prev.map((g) => (g.id === taggedGuest.id ? { ...g, ...taggedGuest } : g))
+        : [taggedGuest, ...prev];
       saveCachedGuests(next);
       return next;
     });
     setGuest((prevGuest) => (prevGuest && prevGuest.id === guestItem.id ? { ...prevGuest, ...guestItem } : prevGuest));
+    syncGuestToSupabaseClient(guestItem).catch(() => {});
   }, []);
 
   const addGuestsBatchDirectly = useCallback((newGuests: Guest[]) => {
@@ -600,13 +692,15 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     newGuests.forEach((g) => {
       if (g?.id) removeDeletedId(DELETED_GUESTS_KEY, g.id);
     });
+    const taggedList = newGuests.map((g) => ({ ...g, _locallyModified: true } as Guest));
     setGuests((prev) => {
       const existingIds = new Set(prev.map((g) => g.id));
-      const uniqueNew = newGuests.filter((g) => g && g.id && !existingIds.has(g.id));
+      const uniqueNew = taggedList.filter((g) => g && g.id && !existingIds.has(g.id));
       const next = [...uniqueNew, ...prev];
       saveCachedGuests(next);
       return next;
     });
+    syncGuestsBatchToSupabaseClient(newGuests).catch(() => {});
   }, []);
 
   const removeGuestDirectly = useCallback((guestId: string) => {
@@ -617,6 +711,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       saveCachedGuests(next);
       return next;
     });
+    deleteGuestFromSupabaseClient(guestId).catch(() => {});
   }, []);
 
   const upsertWishDirectly = useCallback((wishItem: Wish) => {
@@ -624,14 +719,16 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     removeDeletedId(DELETED_WISHES_KEY, wishItem.id);
     const { weddingSlug } = resolveActiveWeddingSlug();
     const [localized] = localizeWishesList([wishItem], settingsRef.current, weddingSlug);
+    const taggedWish = { ...localized, _locallyModified: true } as Wish;
     setWishes((prev) => {
-      const exists = prev.some((w) => w.id === localized.id);
+      const exists = prev.some((w) => w.id === taggedWish.id);
       const next = exists
-        ? prev.map((w) => (w.id === localized.id ? { ...w, ...localized } : w))
-        : [localized, ...prev];
+        ? prev.map((w) => (w.id === taggedWish.id ? { ...w, ...taggedWish } : w))
+        : [taggedWish, ...prev];
       saveCachedWishes(next);
       return next;
     });
+    syncWishToSupabaseClient(localized).catch(() => {});
   }, []);
 
   const removeWishDirectly = useCallback((wishId: string) => {
@@ -642,6 +739,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       saveCachedWishes(next);
       return next;
     });
+    deleteWishFromSupabaseClient(wishId).catch(() => {});
   }, []);
 
   const restoreTemplateWishesDirectly = useCallback(() => {
@@ -654,7 +752,9 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         byId.set(w.id, w);
       }
       for (const def of localizedDefaults) {
-        byId.set(def.id, { ...def, isApproved: true });
+        const restored = { ...def, isApproved: true, _locallyModified: true } as Wish;
+        byId.set(def.id, restored);
+        syncWishToSupabaseClient(restored).catch(() => {});
       }
       const next = Array.from(byId.values());
       saveCachedWishes(next);
@@ -664,19 +764,39 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const fetchGuests = useCallback(async () => {
     try {
-      const res = await fetch('/api/admin/guests', { cache: 'no-store' });
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setGuests((prev) => {
-            const localBase = prev.length > 0 ? prev : loadCachedGuests();
-            const merged = mergeServerAndLocalGuests(data, localBase);
-            saveCachedGuests(merged);
-            return merged;
-          });
-          return;
+      const [supaGuests, apiRes] = await Promise.all([
+        fetchGuestsFromSupabaseClient().catch(() => []),
+        fetch('/api/admin/guests', { cache: 'no-store' }).catch(() => null),
+      ]);
+
+      let apiGuests: Guest[] = [];
+      if (apiRes && apiRes.ok) {
+        const contentType = apiRes.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const data = await apiRes.json();
+          if (Array.isArray(data)) {
+            apiGuests = data;
+          }
         }
+      }
+
+      if (supaGuests.length > 0 || apiGuests.length > 0) {
+        const combinedServerMap = new Map<string, Guest>();
+        for (const ag of apiGuests) {
+          if (ag && ag.id) combinedServerMap.set(ag.id, ag);
+        }
+        // Supabase rows are authoritative
+        for (const sg of supaGuests) {
+          if (sg && sg.id) combinedServerMap.set(sg.id, sg);
+        }
+        const combinedServerList = Array.from(combinedServerMap.values());
+        setGuests((prev) => {
+          const localBase = prev.length > 0 ? prev : loadCachedGuests();
+          const merged = mergeServerAndLocalGuests(combinedServerList, localBase);
+          saveCachedGuests(merged);
+          return merged;
+        });
+        return;
       }
     } catch {
       // not authenticated or network error
@@ -713,6 +833,11 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // ignore storage quota errors
     }
     if (markLocallyModified) {
+      if (slugKey && slugKey !== 'default') {
+        syncSettingsToSupabaseClient(finalSettings, slugKey).catch(() => {});
+      }
+      syncSettingsToSupabaseClient(finalSettings, 'main').catch(() => {});
+      syncSettingsToSupabaseClient(finalSettings, 'default').catch(() => {});
       pushLocalCacheToServer();
     }
   }, []);
@@ -722,17 +847,19 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const slugKey = explicitSlug || settingsRef.current?.slug || resolveActiveWeddingSlug().weddingSlug || 'default';
     removeDeletedId(getDeletedGalleryKey(slugKey), photo.id);
 
+    const taggedPhoto = { ...photo, _locallyModified: true } as GalleryPhoto;
     const currentGalleries =
       settingsRef.current?.galleries && settingsRef.current.galleries.length > 0
         ? settingsRef.current.galleries
         : loadCachedGalleries(slugKey);
 
-    const exists = currentGalleries.some((p) => p.id === photo.id);
+    const exists = currentGalleries.some((p) => p.id === taggedPhoto.id);
     const nextGalleries = exists
-      ? currentGalleries.map((p) => (p.id === photo.id ? { ...p, ...photo } : p))
-      : [photo, ...currentGalleries];
+      ? currentGalleries.map((p) => (p.id === taggedPhoto.id ? { ...p, ...taggedPhoto } : p))
+      : [taggedPhoto, ...currentGalleries];
 
     saveCachedGalleries(slugKey, nextGalleries);
+    syncGalleryPhotoToSupabaseClient(photo).catch(() => {});
 
     setSettings((prev) => {
       if (!prev) return prev;
@@ -747,6 +874,8 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       } catch {
         // ignore
       }
+      syncSettingsToSupabaseClient(updated, slugKey).catch(() => {});
+      syncSettingsToSupabaseClient(updated, 'main').catch(() => {});
       return updated;
     });
     pushLocalCacheToServer();
@@ -764,6 +893,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     const nextGalleries = currentGalleries.filter((p) => p.id !== photoId);
     saveCachedGalleries(slugKey, nextGalleries);
+    deleteGalleryPhotoFromSupabaseClient(photoId).catch(() => {});
 
     setSettings((prev) => {
       if (!prev) return prev;
@@ -778,6 +908,8 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       } catch {
         // ignore
       }
+      syncSettingsToSupabaseClient(updated, slugKey).catch(() => {});
+      syncSettingsToSupabaseClient(updated, 'main').catch(() => {});
       return updated;
     });
     pushLocalCacheToServer();
@@ -793,22 +925,50 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       const qs = params.toString();
       const url = qs ? `/api/public/data?${qs}` : '/api/public/data';
-      
-      const res = await fetch(url, { cache: 'no-store' });
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
-        const data = await res.json();
-        let resolvedSettings: WeddingSettings = data.settings;
-        const effectiveSlugKey = resolvedSettings?.slug || slugKey;
+
+      const [supaSettings, supaWishes, supaGalleries, supaUsers, supaGuests, res] = await Promise.all([
+        fetchSettingsFromSupabaseClient(weddingSlug || 'main').catch(() => null),
+        fetchWishesFromSupabaseClient().catch(() => []),
+        fetchGalleryPhotosFromSupabaseClient().catch(() => []),
+        fetchUsersFromSupabaseClient().catch(() => []),
+        fetchGuestsFromSupabaseClient().catch(() => []),
+        fetch(url, { cache: 'no-store' }).catch(() => null),
+      ]);
+
+      let apiData: any = null;
+      if (res && res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          apiData = await res.json();
+        }
+      }
+
+      if (supaSettings || apiData?.settings) {
+        // Prefer Supabase settings when matching active slug or when newer
+        let baseSettings: WeddingSettings = apiData?.settings || supaSettings;
+        if (supaSettings && supaSettings.groom?.fullName) {
+          const supaMatchesSlug = !weddingSlug || supaSettings.slug === weddingSlug;
+          if (supaMatchesSlug || !apiData?.settings) {
+            baseSettings = { ...(apiData?.settings || {}), ...supaSettings };
+          }
+        }
+
+        const effectiveSlugKey = baseSettings?.slug || slugKey;
+        const rawGalleries =
+          Array.isArray(baseSettings?.galleries) && baseSettings.galleries.length > 0
+            ? baseSettings.galleries
+            : supaGalleries.length > 0
+            ? supaGalleries
+            : apiData?.settings?.galleries || [];
 
         const mergedGalleries = mergeServerAndLocalGalleries(
           effectiveSlugKey,
-          data.settings?.galleries || [],
-          resolvedSettings?.galleries
+          rawGalleries,
+          baseSettings?.galleries
         );
-        resolvedSettings = {
-          ...resolvedSettings,
-          galleries: mergedGalleries
+        const resolvedSettings: WeddingSettings = {
+          ...baseSettings,
+          galleries: mergedGalleries,
         };
         saveCachedGalleries(effectiveSlugKey, mergedGalleries);
         try {
@@ -831,17 +991,38 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setSettings(resolvedSettings);
         settingsRef.current = resolvedSettings;
 
-        if (Array.isArray(data.admins) && data.admins.length > 0) {
-          replaceCachedAdminsFromServer(data.admins);
+        // Merge admins from API + Supabase
+        const combinedAdminsMap = new Map<string, any>();
+        if (Array.isArray(apiData?.admins)) {
+          for (const a of apiData.admins) {
+            if (a && a.username) combinedAdminsMap.set(a.username.toLowerCase(), a);
+          }
+        }
+        if (Array.isArray(supaUsers)) {
+          for (const su of supaUsers) {
+            if (su && su.username && !su.isOwner) {
+              combinedAdminsMap.set(su.username.toLowerCase(), su);
+            }
+          }
+        }
+        const combinedAdmins = Array.from(combinedAdminsMap.values());
+        if (combinedAdmins.length > 0) {
+          replaceCachedAdminsFromServer(combinedAdmins);
           window.dispatchEvent(new Event('admins-updated'));
         }
+
         pushLocalCacheToServer();
 
         const deletedWishes = getDeletedIds(DELETED_WISHES_KEY);
-        const serverWishes: Wish[] = Array.isArray(data.wishes) ? data.wishes : [];
+        const apiWishes: Wish[] = Array.isArray(apiData?.wishes) ? apiData.wishes : [];
         const cachedWishes = loadCachedWishes();
         const wishMap = new Map<string, Wish>();
-        for (const sw of serverWishes) {
+        for (const aw of apiWishes) {
+          if (aw && aw.id && !deletedWishes.has(aw.id)) {
+            wishMap.set(aw.id, aw);
+          }
+        }
+        for (const sw of supaWishes) {
           if (sw && sw.id && !deletedWishes.has(sw.id)) {
             wishMap.set(sw.id, sw);
           }
@@ -855,19 +1036,28 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setWishes(mergedWishes);
         saveCachedWishes(mergedWishes);
 
-        if (data.guest) {
-          setGuest(data.guest);
+        if (supaGuests.length > 0) {
+          setGuests((prev) => {
+            const localBase = prev.length > 0 ? prev : loadCachedGuests();
+            const mergedG = mergeServerAndLocalGuests(supaGuests, localBase);
+            saveCachedGuests(mergedG);
+            return mergedG;
+          });
+        }
+
+        if (apiData?.guest) {
+          setGuest(apiData.guest);
         } else if (guestSlug) {
-          const localGuests = loadCachedGuests();
-          const matchedLocalGuest =
-            localGuests.find(
-              (g) =>
+          const pool = supaGuests.length > 0 ? supaGuests : loadCachedGuests();
+          const matchedGuest =
+            pool.find(
+              (g: Guest) =>
                 g.slug.toLowerCase() === guestSlug.toLowerCase() ||
                 g.name.toLowerCase() === guestSlug.toLowerCase() ||
                 g.id === guestSlug
             ) || null;
-          if (matchedLocalGuest) {
-            setGuest(matchedLocalGuest);
+          if (matchedGuest) {
+            setGuest(matchedGuest);
           }
         }
         if (resolvedSettings?.announcement) {
@@ -876,7 +1066,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return;
       }
     } catch {
-      // Transient fetch failure (e.g. during server restart); fall back to cache and retry silently
+      // Transient fetch failure; fall back to cache and retry silently
     }
 
     // Fallback to cached settings & guest if server is temporarily unreachable
@@ -1173,9 +1363,21 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     connectWebSocket();
 
+    // Subscribe to Supabase Realtime postgres_changes so edits on Computer trigger instant refresh on HP
+    const supaChannel = isSupabaseReady()
+      ? supabase
+          .channel('wedding-realtime-sync')
+          .on('postgres_changes', { event: '*', schema: 'public' }, () => {
+            refreshData();
+            fetchGuests();
+          })
+          .subscribe()
+      : null;
+
     // Periodic background sync + instant visibility/focus sync so edits on Computer automatically appear on HP
     const syncInterval = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
+        pushLocalCacheToServer();
         refreshData();
         fetchGuests();
       }
@@ -1183,6 +1385,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
+        pushLocalCacheToServer();
         refreshData();
         fetchGuests();
       }
@@ -1194,6 +1397,9 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       clearInterval(syncInterval);
       window.removeEventListener('focus', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      if (supaChannel) {
+        supabase.removeChannel(supaChannel).catch(() => {});
+      }
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
