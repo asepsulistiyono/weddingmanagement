@@ -859,18 +859,16 @@ app.post('/api/public/sync-state', async (req, res) => {
     }
   }
 
-  // Sync wedding settings & galleries from client only when explicitly modified by user
+  // Sync wedding settings & galleries from client only when not yet saved on server
   if (Array.isArray(settingsList)) {
     for (const item of settingsList) {
       if (!item || !item.settings || !item.isLocallyModified) continue;
       const s: WeddingSettings = { ...item.settings };
       delete (s as any)._locallyModified;
       const slugKey = sanitizeSlug(s.slug || item.slug || 'main') || 'main';
-      weddingsMap.set(slugKey, s);
-      await dbRepo.saveSettings(s, slugKey);
-      if (item.isMain || slugKey === weddingSettings.slug || weddingSettings.slug === 'rizky_dan_siti') {
-        weddingSettings = s;
-        await dbRepo.saveSettings(s, 'main');
+      if (!weddingsMap.has(slugKey)) {
+        weddingsMap.set(slugKey, s);
+        await dbRepo.saveSettings(s, slugKey);
       }
       if (Array.isArray(s.galleries)) {
         for (const gal of s.galleries) {
@@ -1933,38 +1931,56 @@ app.put('/api/superadmin/settings', async (req, res) => {
 
   if (!targetSlug) targetSlug = 'default';
 
-  const current = weddingsMap.get(targetSlug) || weddingSettings;
+  const oldKey = newSettings.oldSlug ? sanitizeSlug(newSettings.oldSlug) : '';
+  const current =
+    weddingsMap.get(targetSlug) ||
+    (oldKey ? weddingsMap.get(oldKey) : undefined) ||
+    weddingSettings;
   const coupleNames = newSettings.coupleNames || (groomNick && brideNick ? `${groomNick} & ${brideNick}` : current.coupleNames);
   const title = newSettings.title || (coupleNames ? `The Wedding of ${coupleNames}` : current.title);
 
   const updated: WeddingSettings = {
     ...current,
     ...newSettings,
+    id: targetSlug,
     slug: targetSlug,
     coupleNames,
     title
   };
+  delete (updated as any)._locallyModified;
+  delete (updated as any).oldSlug;
+  delete (updated as any).adminEmail;
 
   weddingsMap.set(targetSlug, updated);
+  weddingsMap.set('main', updated);
+  weddingsMap.set('default', updated);
 
   // If old slug existed and changed, update map
-  if (newSettings.oldSlug && sanitizeSlug(newSettings.oldSlug) !== targetSlug) {
-    const oldKey = sanitizeSlug(newSettings.oldSlug);
-    if (oldKey !== 'main' && oldKey !== 'default') {
-      weddingsMap.delete(oldKey);
-    }
+  if (oldKey && oldKey !== targetSlug && oldKey !== 'main' && oldKey !== 'default') {
+    weddingsMap.set(oldKey, updated);
   }
 
-  // Update associated adminUser's weddingSlug
-  if (newSettings.adminEmail) {
-    const targetAdmin = String(newSettings.adminEmail).toLowerCase();
-    const u = adminUsers.find(user => 
-      (user.email && user.email.toLowerCase() === targetAdmin) ||
-      (user.username && user.username.toLowerCase() === targetAdmin)
-    );
-    if (u) {
+  // Update associated Super Admin & Admin WO accounts (never overwrite the Owner account)
+  const targetAdmin = newSettings.adminEmail ? String(newSettings.adminEmail).toLowerCase() : '';
+  let usersUpdated = false;
+  for (const u of adminUsers) {
+    if (u.isOwner || u.username?.toLowerCase() === 'asepsulistiyono1' || u.email?.toLowerCase() === 'asepsulistiyono1@gmail.com') {
+      continue;
+    }
+    const uSlug = u.weddingSlug ? sanitizeSlug(u.weddingSlug) : '';
+    const matchesSlug = (uSlug && (uSlug === targetSlug || (oldKey && uSlug === oldKey)));
+    const matchesAdminIdent =
+      targetAdmin &&
+      ((u.email && u.email.toLowerCase() === targetAdmin) ||
+        (u.username && u.username.toLowerCase() === targetAdmin));
+
+    if (matchesSlug || matchesAdminIdent) {
       u.weddingSlug = targetSlug;
       u.coupleNames = coupleNames;
+      if (u.role === 'super_admin' && coupleNames) {
+        u.name = coupleNames;
+      }
+      usersUpdated = true;
       await dbRepo.createDbUser({
         uid: u.id,
         username: u.username,
@@ -1988,11 +2004,19 @@ app.put('/api/superadmin/settings', async (req, res) => {
 
   await dbRepo.saveSettings(updated, targetSlug);
   await dbRepo.saveSettings(updated, 'main');
+  await dbRepo.saveSettings(updated, 'default');
 
   broadcast({
     type: 'SETTINGS_UPDATED',
-    payload: updated
+    payload: { ...updated, ...(oldKey ? { oldSlug: oldKey } : {}) } as WeddingSettings
   });
+
+  if (usersUpdated) {
+    broadcast({
+      type: 'USERS_UPDATED',
+      payload: adminUsers.filter(u => !u.isOwner && u.username?.toLowerCase() !== 'asepsulistiyono1')
+    });
+  }
 
   res.json({ 
     success: true, 
@@ -2329,13 +2353,60 @@ app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (req,
 
   // If updating the Super Admin's wedding slug & couple names
   if (targetUser.role === 'super_admin' && (groomName || brideName || customSlug)) {
+    const oldSlug = targetUser.weddingSlug ? sanitizeSlug(targetUser.weddingSlug) : '';
     const gn = groomName ? String(groomName).trim() : (targetUser.coupleNames?.split('&')[0]?.trim() || 'Thomas');
     const bn = brideName ? String(brideName).trim() : (targetUser.coupleNames?.split('&')[1]?.trim() || 'Juwita');
     const newSlug = customSlug ? sanitizeSlug(String(customSlug)) : generateWeddingSlug(gn, bn);
-    
+    const nextCoupleNames = `${gn} & ${bn}`;
+
     targetUser.weddingSlug = newSlug;
-    targetUser.coupleNames = `${gn} & ${bn}`;
-    createWeddingTemplate(newSlug, gn, bn);
+    targetUser.coupleNames = nextCoupleNames;
+    targetUser.name = nextCoupleNames;
+
+    const existingSettings =
+      (oldSlug ? weddingsMap.get(oldSlug) : undefined) ||
+      weddingsMap.get(newSlug) ||
+      createWeddingTemplate(newSlug, gn, bn);
+
+    const updatedWeddingSettings: WeddingSettings = {
+      ...existingSettings,
+      id: newSlug,
+      slug: newSlug,
+      coupleNames: nextCoupleNames,
+      title: `The Wedding of ${nextCoupleNames}`,
+      groom: {
+        ...existingSettings.groom,
+        fullName:
+          existingSettings.groom.fullName === existingSettings.groom.nickname || !existingSettings.groom.fullName
+            ? gn
+            : existingSettings.groom.fullName,
+        nickname: gn,
+      },
+      bride: {
+        ...existingSettings.bride,
+        fullName:
+          existingSettings.bride.fullName === existingSettings.bride.nickname || !existingSettings.bride.fullName
+            ? bn
+            : existingSettings.bride.fullName,
+        nickname: bn,
+      },
+    };
+
+    weddingsMap.set(newSlug, updatedWeddingSettings);
+    if (oldSlug && oldSlug !== newSlug) {
+      weddingsMap.set(oldSlug, updatedWeddingSettings);
+    }
+    if (weddingSettings.slug === oldSlug || weddingSettings.slug === newSlug) {
+      weddingSettings = updatedWeddingSettings;
+      await dbRepo.saveSettings(updatedWeddingSettings, 'main');
+      await dbRepo.saveSettings(updatedWeddingSettings, 'default');
+    }
+    await dbRepo.saveSettings(updatedWeddingSettings, newSlug);
+
+    broadcast({
+      type: 'SETTINGS_UPDATED',
+      payload: { ...updatedWeddingSettings, ...(oldSlug ? { oldSlug } : {}) } as WeddingSettings
+    });
   }
 
   await dbRepo.createDbUser({
@@ -2639,10 +2710,17 @@ async function initDatabaseData() {
       for (const w of allWeddings) {
         if (w.id && w.data && w.data.groom?.fullName) {
           weddingsMap.set(w.id, w.data);
-          if (w.data.slug) {
+          if (w.data.slug && (w.id === w.data.slug || !weddingsMap.has(w.data.slug))) {
             weddingsMap.set(w.data.slug, w.data);
           }
         }
+      }
+      const mainFromMap = weddingsMap.get('main');
+      if (mainFromMap && mainFromMap.groom?.fullName) {
+        const latestForMainSlug = mainFromMap.slug ? weddingsMap.get(mainFromMap.slug) : undefined;
+        weddingSettings = latestForMainSlug || mainFromMap;
+        weddingsMap.set('main', weddingSettings);
+        weddingsMap.set('default', weddingSettings);
       }
     }
 

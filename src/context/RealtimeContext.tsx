@@ -22,7 +22,7 @@ interface RealtimeContextType {
   refreshData: () => Promise<void>;
   fetchGuests: () => Promise<void>;
   refreshAll: () => Promise<void>;
-  updateSettingsDirectly: (newSettings: WeddingSettings) => void;
+  updateSettingsDirectly: (newSettings: WeddingSettings, markLocallyModified?: boolean) => void;
   upsertGalleryPhotoDirectly: (photo: GalleryPhoto, slug?: string) => void;
   removeGalleryPhotoDirectly: (photoId: string, slug?: string) => void;
   upsertGuestDirectly: (guestItem: Guest) => void;
@@ -679,7 +679,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setGuests((prev) => (prev.length > 0 ? prev : loadCachedGuests()));
   }, []);
 
-  const updateSettingsDirectly = useCallback((newSettings: WeddingSettings) => {
+  const updateSettingsDirectly = useCallback((newSettings: WeddingSettings, markLocallyModified: boolean = true) => {
     const slugKey = newSettings.slug || resolveActiveWeddingSlug().weddingSlug || 'default';
     const mergedGalleries = Array.isArray(newSettings.galleries)
       ? mergeServerAndLocalGalleries(slugKey, newSettings.galleries, [])
@@ -687,8 +687,11 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const finalSettings: WeddingSettings & { _locallyModified?: boolean } = {
       ...newSettings,
       galleries: mergedGalleries,
-      _locallyModified: true
+      ...(markLocallyModified ? { _locallyModified: true } : {})
     };
+    if (!markLocallyModified) {
+      delete finalSettings._locallyModified;
+    }
     setSettings(finalSettings);
     settingsRef.current = finalSettings;
     if (finalSettings.announcement !== undefined) {
@@ -704,7 +707,9 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch {
       // ignore storage quota errors
     }
-    pushLocalCacheToServer();
+    if (markLocallyModified) {
+      pushLocalCacheToServer();
+    }
   }, []);
 
   const upsertGalleryPhotoDirectly = useCallback((photo: GalleryPhoto, explicitSlug?: string) => {
@@ -791,27 +796,6 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         let resolvedSettings: WeddingSettings = data.settings;
         const effectiveSlugKey = resolvedSettings?.slug || slugKey;
 
-        // Only apply localStorage settings override if THIS browser explicitly modified settings while server is still on default Rizky & Siti
-        try {
-          const cachedRaw =
-            localStorage.getItem(`wedding_settings_cache_${effectiveSlugKey}`) ||
-            localStorage.getItem(`wedding_settings_cache_${slugKey}`);
-          if (cachedRaw) {
-            const cached = JSON.parse(cachedRaw) as WeddingSettings & { _locallyModified?: boolean };
-            const serverIsStillDefault =
-              resolvedSettings?.coupleNames === 'Rizky & Siti' &&
-              cached?.coupleNames &&
-              cached.coupleNames !== 'Rizky & Siti';
-            if (cached && cached._locallyModified && serverIsStillDefault) {
-              resolvedSettings = {
-                ...resolvedSettings,
-                ...cached,
-              };
-            }
-          }
-        } catch {
-          // ignore cache parse error
-        }
         const mergedGalleries = mergeServerAndLocalGalleries(
           effectiveSlugKey,
           data.settings?.galleries || [],
@@ -826,9 +810,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           const cleanToCache = { ...resolvedSettings };
           delete (cleanToCache as any)._locallyModified;
           localStorage.setItem(`wedding_settings_cache_${effectiveSlugKey}`, JSON.stringify(cleanToCache));
-          if (slugKey === 'default') {
-            localStorage.setItem(`wedding_settings_cache_default`, JSON.stringify(cleanToCache));
-          }
+          localStorage.setItem(`wedding_settings_cache_default`, JSON.stringify(cleanToCache));
         } catch {
           // ignore
         }
@@ -1056,19 +1038,39 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 });
                 break;
 
-              case 'SETTINGS_UPDATED':
-                if (!currentSlug || !data.payload?.slug || data.payload.slug === currentSlug) {
-                  setSettings(data.payload);
-                  settingsRef.current = data.payload;
-                  setAnnouncement(data.payload.announcement || null);
+              case 'SETTINGS_UPDATED': {
+                const payloadOldSlug = (data.payload as any)?.oldSlug;
+                const matchesCurrent =
+                  !currentSlug ||
+                  !data.payload?.slug ||
+                  data.payload.slug === currentSlug ||
+                  payloadOldSlug === currentSlug ||
+                  settingsRef.current?.slug === data.payload.slug ||
+                  (payloadOldSlug && settingsRef.current?.slug === payloadOldSlug);
+
+                if (matchesCurrent) {
+                  const cleanPayload = { ...data.payload };
+                  delete (cleanPayload as any).oldSlug;
+                  delete (cleanPayload as any)._locallyModified;
+                  setSettings(cleanPayload);
+                  settingsRef.current = cleanPayload;
+                  setAnnouncement(cleanPayload.announcement || null);
                   try {
-                    const slugKey = data.payload.slug || currentSlug || 'default';
-                    localStorage.setItem(`wedding_settings_cache_${slugKey}`, JSON.stringify(data.payload));
+                    const slugKey = cleanPayload.slug || currentSlug || 'default';
+                    localStorage.setItem(`wedding_settings_cache_${slugKey}`, JSON.stringify(cleanPayload));
+                    localStorage.setItem(`wedding_settings_cache_default`, JSON.stringify(cleanPayload));
+                    if (payloadOldSlug && currentSlug === payloadOldSlug && cleanPayload.slug) {
+                      sessionStorage.setItem('wedding_active_slug', cleanPayload.slug);
+                      if (window.location.hash === `#/${payloadOldSlug}`) {
+                        window.location.hash = `#/${cleanPayload.slug}`;
+                      }
+                    }
                   } catch {
                     // ignore
                   }
                 }
                 break;
+              }
 
               case 'GALLERY_UPDATED': {
                 const slugKey = currentSlug || settingsRef.current?.slug || 'default';
@@ -1163,7 +1165,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         refreshData();
         fetchGuests();
       }
-    }, 6000);
+    }, 3000);
 
     return () => {
       clearInterval(syncInterval);

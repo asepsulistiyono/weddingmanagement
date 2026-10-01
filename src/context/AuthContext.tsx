@@ -424,6 +424,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
+  useEffect(() => {
+    const handleAdminsUpdated = () => {
+      setUser((prevUser) => {
+        if (!prevUser || prevUser.isOwner) return prevUser;
+        const list = getCachedAdminsList();
+        const matched = list.find(
+          (u) =>
+            u.id === prevUser.id ||
+            (u.username &&
+              prevUser.username &&
+              u.username.toLowerCase() === prevUser.username.toLowerCase())
+        );
+        if (!matched) return prevUser;
+        if (
+          matched.coupleNames !== prevUser.coupleNames ||
+          matched.name !== prevUser.name ||
+          matched.weddingSlug !== prevUser.weddingSlug
+        ) {
+          if (matched.weddingSlug && matched.weddingSlug !== prevUser.weddingSlug) {
+            try {
+              sessionStorage.setItem('wedding_active_slug', matched.weddingSlug);
+            } catch {
+              // ignore
+            }
+          }
+          return {
+            ...prevUser,
+            ...matched,
+            isOwner: isOwnerAccountCheck(matched),
+          };
+        }
+        return prevUser;
+      });
+    };
+    window.addEventListener('admins-updated', handleAdminsUpdated);
+    return () => window.removeEventListener('admins-updated', handleAdminsUpdated);
+  }, []);
+
   // Helper to sync a Supabase Auth session with backend AdminUser profile upon explicit login
   const syncSupabaseUserWithBackend = async (session: Session) => {
     setSupabaseSession(session);
@@ -459,7 +497,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           };
           applyActiveWeddingSlugForUser(syncedUser);
           setUser(syncedUser);
-          saveCachedAdminUser(syncedUser);
+          saveCachedAdminUser(syncedUser, false);
           return;
         }
       }
@@ -482,7 +520,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
     applyActiveWeddingSlugForUser(fallbackSupaUser);
     setUser(fallbackSupaUser);
-    saveCachedAdminUser(fallbackSupaUser);
+    saveCachedAdminUser(fallbackSupaUser, false);
   };
 
   const login = async (usernameOrEmail: string, password: string) => {
@@ -515,7 +553,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               ...data.user,
               isOwner: isOwnerAccountCheck(data.user),
             };
-            saveCachedAdminUser({ ...loggedInUser, password });
+            saveCachedAdminUser({ ...loggedInUser, password }, false);
             applyActiveWeddingSlugForUser(loggedInUser);
             setUser(loggedInUser);
             setToken(data.token || `token_${loggedInUser.role}_${loggedInUser.id}_${Date.now()}`);

@@ -148,9 +148,37 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [isSlugManual, setIsSlugManual] = useState(true);
   const [copiedLink, setCopiedLink] = useState(false);
 
-  // Sync form states whenever settings for the active wedding slug arrive or change
+  const settingsSignature = settings
+    ? JSON.stringify({
+        slug: settings.slug,
+        coupleNames: settings.coupleNames,
+        groom: settings.groom,
+        bride: settings.bride,
+        events: settings.events,
+        countdownDate: settings.countdownDate,
+        themeTemplateId: settings.themeTemplateId,
+        religionFormat: settings.religionFormat,
+        invitationFormat: settings.invitationFormat,
+        quote: settings.quote,
+        bankAccounts: settings.bankAccounts,
+        giftAddress: settings.giftAddress,
+        announcement: settings.announcement,
+      })
+    : '';
+
+  // Sync form states whenever settings for the active wedding slug arrive or change from server
   useEffect(() => {
     if (!settings) return;
+    // Do not overwrite while user is actively typing in an input/textarea on this device
+    const activeEl = document.activeElement;
+    const isTypingInForm =
+      activeEl &&
+      (activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        activeEl.tagName === 'SELECT');
+    if (isTypingInForm && saveLoading === false) {
+      return;
+    }
     // If logged in as a specific couple's Super Admin, ignore stale default settings from another slug
     const userSlug = !user?.isOwner && user?.weddingSlug ? sanitizeSlug(user.weddingSlug) : null;
     if (userSlug && settings.slug && sanitizeSlug(settings.slug) !== userSlug) {
@@ -253,12 +281,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     setGiftPhone(settings.giftAddress?.phone || '');
     setGiftAddress(settings.giftAddress?.address || '');
 
-    if (userSlug) {
-      setWeddingSlug(userSlug);
-    } else if (settings.slug) {
+    if (settings.slug) {
       setWeddingSlug(settings.slug);
+    } else if (userSlug) {
+      setWeddingSlug(userSlug);
     }
-  }, [settings?.slug, user?.weddingSlug, user?.isOwner]);
+  }, [settingsSignature, user?.weddingSlug, user?.isOwner]);
 
   useEffect(() => {
     if (settings?.themeTemplateId) {
@@ -553,7 +581,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       if (res.ok) {
         const data = await res.json();
         if (data.settings) {
-          updateSettingsDirectly(data.settings);
+          updateSettingsDirectly(data.settings, false);
         }
       }
       setSaveSuccess(true);

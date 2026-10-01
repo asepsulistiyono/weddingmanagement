@@ -93,7 +93,7 @@ export const ThemeTemplatesTab: React.FC<ThemeTemplatesTabProps> = ({
       if (res.ok) {
         const data = await res.json();
         if (data.settings) {
-          updateSettingsDirectly(data.settings);
+          updateSettingsDirectly(data.settings, false);
         }
       }
       setSuccessBanner(

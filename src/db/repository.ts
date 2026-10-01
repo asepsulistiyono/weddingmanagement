@@ -1,4 +1,4 @@
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, asc } from 'drizzle-orm';
 import { db, isPostgresReady } from './index.ts';
 import {
   supabase,
@@ -251,7 +251,7 @@ export async function getAllWeddings(): Promise<Array<{ id: string; data: Weddin
 
   if (isPostgresReady()) {
     try {
-      const records = await db.select().from(weddingSettingsTable);
+      const records = await db.select().from(weddingSettingsTable).orderBy(asc(weddingSettingsTable.updatedAt));
       for (const r of records) {
         byId.set(r.id, r.data as WeddingSettings);
       }

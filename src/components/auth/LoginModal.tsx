@@ -151,7 +151,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   htmlFor="manager-email"
                   className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-stone-700"
                 >
-                  Email
+                  Username atau Email
                 </label>
 
                 <div className="relative">
@@ -163,7 +163,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   <input
                     id="manager-email"
                     name="email"
-                    type="email"
+                    type="text"
                     required
                     autoComplete="off"
                     autoCapitalize="none"
@@ -171,7 +171,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                     spellCheck={false}
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
-                    placeholder="nama@email.com"
+                    placeholder="Masukkan username atau email"
                     className="w-full rounded-xl border border-stone-200 bg-stone-50 py-2.5 pl-10 pr-3.5 text-sm text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                   />
                 </div>

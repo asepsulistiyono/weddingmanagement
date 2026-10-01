@@ -1,7 +1,4 @@
-import { getSupabaseSession } from './lib/supabase-session'
-// Import `supabase` dari file client Anda
-
-const session = await getSupabaseSession(supabase)
+import type { Session, SupabaseClient } from '@supabase/supabase-js'
 
 export async function getSupabaseSession(
   supabase: SupabaseClient,
@@ -14,5 +11,6 @@ export async function getSupabaseSession(
 
   return data.session
 }
+
 
 
