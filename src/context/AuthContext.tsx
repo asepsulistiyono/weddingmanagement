@@ -22,6 +22,47 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const CACHED_ADMINS_KEY = 'wedding_cached_admins';
+const DELETED_ADMINS_KEY = 'wedding_deleted_admins';
+
+function getDeletedAdminsSet(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_ADMINS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.map((s) => String(s).toLowerCase()));
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return new Set();
+}
+
+function addDeletedAdminKey(idOrUsername: string) {
+  if (!idOrUsername) return;
+  try {
+    const set = getDeletedAdminsSet();
+    set.add(idOrUsername.trim().toLowerCase());
+    localStorage.setItem(DELETED_ADMINS_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // ignore
+  }
+}
+
+function removeDeletedAdminKey(idOrUsername?: string) {
+  if (!idOrUsername) return;
+  try {
+    const set = getDeletedAdminsSet();
+    const clean = idOrUsername.trim().toLowerCase();
+    if (set.has(clean)) {
+      set.delete(clean);
+      localStorage.setItem(DELETED_ADMINS_KEY, JSON.stringify(Array.from(set)));
+    }
+  } catch {
+    // ignore
+  }
+}
 
 export function isOwnerAccountCheck(u?: Partial<AdminUser> | null): boolean {
   if (!u) return false;
@@ -49,6 +90,19 @@ export const DEFAULT_FALLBACK_ADMINS: Array<AdminUser & { password?: string }> =
     active: true,
     password: 'owner123',
     createdAt: '2026-09-01T08:00:00Z',
+  },
+  {
+    id: 'user-super-1790439685804',
+    username: 'budi_wati',
+    name: 'Budi & Wati',
+    email: 'budi_wati@wedding.local',
+    role: 'super_admin',
+    isOwner: false,
+    weddingSlug: 'budi_dan_wati',
+    coupleNames: 'Budi & Wati',
+    password: 'super123',
+    active: true,
+    createdAt: '2026-09-30T15:19:00Z',
   },
   {
     id: 'user-super-1',
@@ -110,7 +164,14 @@ export const DEFAULT_FALLBACK_ADMINS: Array<AdminUser & { password?: string }> =
 ];
 
 export function getCachedAdminsList(): Array<AdminUser & { password?: string }> {
-  const merged = [...DEFAULT_FALLBACK_ADMINS];
+  const deleted = getDeletedAdminsSet();
+  const byUsername = new Map<string, AdminUser & { password?: string }>();
+
+  for (const def of DEFAULT_FALLBACK_ADMINS) {
+    if (deleted.has(def.id.toLowerCase()) || deleted.has(def.username.toLowerCase())) continue;
+    byUsername.set(def.username.toLowerCase(), { ...def });
+  }
+
   try {
     const raw = localStorage.getItem(CACHED_ADMINS_KEY);
     if (raw) {
@@ -118,20 +179,20 @@ export function getCachedAdminsList(): Array<AdminUser & { password?: string }> 
       if (Array.isArray(parsed)) {
         for (const item of parsed) {
           if (!item || !item.username) continue;
-          const idx = merged.findIndex(
-            (u) =>
-              u.id === item.id ||
-              u.username.toLowerCase() === String(item.username).toLowerCase()
-          );
-          if (idx >= 0) {
-            merged[idx] = {
-              ...merged[idx],
+          const uname = String(item.username).toLowerCase();
+          const uid = String(item.id || '').toLowerCase();
+          if (deleted.has(uname) || (uid && deleted.has(uid))) continue;
+
+          const existing = byUsername.get(uname);
+          if (existing) {
+            byUsername.set(uname, {
+              ...existing,
               ...item,
-              password: item.password || merged[idx].password,
-              isOwner: isOwnerAccountCheck(item) || isOwnerAccountCheck(merged[idx]),
-            };
+              password: item.password || existing.password,
+              isOwner: isOwnerAccountCheck(item) || isOwnerAccountCheck(existing),
+            });
           } else {
-            merged.push({
+            byUsername.set(uname, {
               ...item,
               isOwner: isOwnerAccountCheck(item),
             });
@@ -142,11 +203,23 @@ export function getCachedAdminsList(): Array<AdminUser & { password?: string }> 
   } catch {
     // ignore storage parse error
   }
+
+  const merged = Array.from(byUsername.values());
+  merged.sort((a, b) => {
+    const tA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return tB - tA;
+  });
   return merged;
 }
 
-export function saveCachedAdminUser(userToSave: AdminUser & { password?: string }) {
+export function saveCachedAdminUser(
+  userToSave: AdminUser & { password?: string; _locallyModified?: boolean },
+  markLocallyModified: boolean = true
+) {
   try {
+    removeDeletedAdminKey(userToSave.id);
+    removeDeletedAdminKey(userToSave.username);
     const list = getCachedAdminsList();
     const idx = list.findIndex(
       (u) =>
@@ -155,15 +228,17 @@ export function saveCachedAdminUser(userToSave: AdminUser & { password?: string 
           userToSave.username &&
           u.username.toLowerCase() === userToSave.username.toLowerCase())
     );
-    const normalized = {
+    const normalized: AdminUser & { password?: string; _locallyModified?: boolean } = {
       ...userToSave,
       password: userToSave.password || (idx >= 0 ? list[idx].password : undefined),
       isOwner: isOwnerAccountCheck(userToSave),
+      createdAt: userToSave.createdAt || (idx >= 0 ? list[idx].createdAt : new Date().toISOString()),
+      ...(markLocallyModified ? { _locallyModified: true } : {}),
     };
     if (idx >= 0) {
       list[idx] = { ...list[idx], ...normalized };
     } else {
-      list.push(normalized);
+      list.unshift(normalized);
     }
     localStorage.setItem(CACHED_ADMINS_KEY, JSON.stringify(list));
   } catch {
@@ -171,9 +246,77 @@ export function saveCachedAdminUser(userToSave: AdminUser & { password?: string 
   }
 }
 
+export function replaceCachedAdminsFromServer(
+  serverUsers: Array<AdminUser & { password?: string }>
+): Array<AdminUser & { password?: string }> {
+  const deleted = getDeletedAdminsSet();
+  const byUsername = new Map<string, AdminUser & { password?: string }>();
+
+  // Always keep Owner account protected in local cache for login
+  const ownerDef = DEFAULT_FALLBACK_ADMINS[0];
+  byUsername.set(ownerDef.username.toLowerCase(), { ...ownerDef });
+
+  // Server list from PostgreSQL is authoritative across Computer & HP
+  for (const su of serverUsers) {
+    if (!su || !su.username) continue;
+    const uname = su.username.toLowerCase();
+    const uid = (su.id || '').toLowerCase();
+    if (deleted.has(uname) || (uid && deleted.has(uid))) continue;
+    const cleanUser: AdminUser & { password?: string; _locallyModified?: boolean } = {
+      ...su,
+      isOwner: isOwnerAccountCheck(su),
+    };
+    delete cleanUser._locallyModified;
+    byUsername.set(uname, cleanUser);
+  }
+
+  // Keep any locally modified user that hasn't finished syncing to server yet
+  try {
+    const raw = localStorage.getItem(CACHED_ADMINS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (!item || !item.username) continue;
+          const uname = String(item.username).toLowerCase();
+          const uid = String(item.id || '').toLowerCase();
+          if (deleted.has(uname) || (uid && deleted.has(uid))) continue;
+          if (item._locallyModified && !byUsername.has(uname)) {
+            byUsername.set(uname, {
+              ...item,
+              isOwner: isOwnerAccountCheck(item),
+            });
+          } else if (byUsername.has(uname) && item.password && !byUsername.get(uname)?.password) {
+            const cur = byUsername.get(uname)!;
+            byUsername.set(uname, { ...cur, password: item.password });
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  const merged = Array.from(byUsername.values());
+  merged.sort((a, b) => {
+    const tA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return tB - tA;
+  });
+
+  try {
+    localStorage.setItem(CACHED_ADMINS_KEY, JSON.stringify(merged));
+  } catch {
+    // ignore
+  }
+
+  return merged;
+}
+
 export function deleteCachedAdminUser(idOrUsername: string) {
   try {
     const clean = idOrUsername.trim().toLowerCase();
+    addDeletedAdminKey(clean);
     const list = getCachedAdminsList().filter(
       (u) =>
         u.id.toLowerCase() !== clean &&

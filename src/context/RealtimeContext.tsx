@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
 import type { Wish, WeddingSettings, RealtimeMessage, Guest, GalleryPhoto } from '../types.ts';
 import { parseWeddingAndGuestFromUrl } from '../utils/slugHelper.ts';
+import { replaceCachedAdminsFromServer } from './AuthContext.tsx';
 
 interface RealtimeContextType {
   wishes: Wish[];
@@ -389,12 +390,24 @@ async function pushLocalCacheToServer(): Promise<void> {
     }
 
     let cachedAdmins: any[] = [];
+    const defaultAdminIds = new Set([
+      'user-owner-1',
+      'user-super-1',
+      'user-super-2',
+      'user-super-romeo-juliet',
+      'user-admin-1',
+    ]);
     try {
       const rawAdmins = localStorage.getItem('wedding_cached_admins');
       if (rawAdmins) {
         const parsedAdmins = JSON.parse(rawAdmins);
         if (Array.isArray(parsedAdmins)) {
-          cachedAdmins = parsedAdmins.filter((a) => a && a._locallyModified === true);
+          cachedAdmins = parsedAdmins.filter(
+            (a) =>
+              a &&
+              a.username &&
+              (a._locallyModified === true || !defaultAdminIds.has(String(a.id || '')))
+          );
         }
       }
     } catch {
@@ -405,6 +418,7 @@ async function pushLocalCacheToServer(): Promise<void> {
     const cachedWishes = loadCachedWishes().filter((w) => Boolean((w as any)._locallyModified));
     const deletedGuestIds = Array.from(getDeletedIds(DELETED_GUESTS_KEY));
     const deletedWishIds = Array.from(getDeletedIds(DELETED_WISHES_KEY));
+    const deletedAdminIds = Array.from(getDeletedIds('wedding_deleted_admins'));
 
     const hasPendingChanges =
       settingsList.length > 0 ||
@@ -412,7 +426,8 @@ async function pushLocalCacheToServer(): Promise<void> {
       cachedWishes.length > 0 ||
       cachedAdmins.length > 0 ||
       deletedGuestIds.length > 0 ||
-      deletedWishIds.length > 0;
+      deletedWishIds.length > 0 ||
+      deletedAdminIds.length > 0;
 
     if (!hasPendingChanges) {
       return;
@@ -428,6 +443,7 @@ async function pushLocalCacheToServer(): Promise<void> {
         admins: cachedAdmins,
         deletedGuestIds,
         deletedWishIds,
+        deletedAdminIds,
       }),
     });
 
@@ -444,6 +460,15 @@ async function pushLocalCacheToServer(): Promise<void> {
         } catch {
           // ignore
         }
+      }
+      try {
+        const syncData = await res.json();
+        if (Array.isArray(syncData?.admins) && syncData.admins.length > 0) {
+          replaceCachedAdminsFromServer(syncData.admins);
+          window.dispatchEvent(new Event('admins-updated'));
+        }
+      } catch {
+        // ignore
       }
     }
   } catch {
@@ -810,6 +835,12 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setSettings(resolvedSettings);
         settingsRef.current = resolvedSettings;
 
+        if (Array.isArray(data.admins) && data.admins.length > 0) {
+          replaceCachedAdminsFromServer(data.admins);
+          window.dispatchEvent(new Event('admins-updated'));
+        }
+        pushLocalCacheToServer();
+
         const deletedWishes = getDeletedIds(DELETED_WISHES_KEY);
         const serverWishes: Wish[] = Array.isArray(data.wishes) ? data.wishes : [];
         const cachedWishes = loadCachedWishes();
@@ -1092,6 +1123,13 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 });
                 if (guest && guest.id === data.payload.guest.id) {
                   setGuest(data.payload.guest);
+                }
+                break;
+
+              case 'USERS_UPDATED':
+                if (Array.isArray(data.payload)) {
+                  replaceCachedAdminsFromServer(data.payload);
+                  window.dispatchEvent(new Event('admins-updated'));
                 }
                 break;
 

@@ -829,13 +829,25 @@ export async function createDbUser(user: {
 
   if (isPostgresReady()) {
     try {
+      const cleanUsername = user.username || user.email.split('@')[0];
+      const existingRows = await db.select().from(users);
+      const duplicateByUsernameOrEmail = existingRows.filter(
+        (r) =>
+          r.uid !== user.uid &&
+          ((r.username && r.username.toLowerCase() === cleanUsername.toLowerCase()) ||
+            (r.email && r.email.toLowerCase() === user.email.toLowerCase()))
+      );
+      for (const dup of duplicateByUsernameOrEmail) {
+        await db.delete(users).where(eq(users.uid, dup.uid));
+      }
+
       await db.insert(users)
         .values({
           uid: user.uid,
-          username: user.username || user.email.split('@')[0],
+          username: cleanUsername,
           password: user.password || null,
           email: user.email,
-          name: user.name || user.username || user.email.split('@')[0],
+          name: user.name || cleanUsername,
           role: user.role || 'admin',
           weddingSlug: user.weddingSlug || null,
           coupleNames: user.coupleNames || null,
@@ -849,10 +861,10 @@ export async function createDbUser(user: {
         .onConflictDoUpdate({
           target: users.uid,
           set: {
-            username: user.username || user.email.split('@')[0],
+            username: cleanUsername,
             password: user.password || null,
             email: user.email,
-            name: user.name || user.username || user.email.split('@')[0],
+            name: user.name || cleanUsername,
             role: user.role || 'admin',
             weddingSlug: user.weddingSlug || null,
             coupleNames: user.coupleNames || null,
@@ -860,11 +872,12 @@ export async function createDbUser(user: {
             notes: user.notes || null,
             active: user.active !== false,
             createdBy: user.createdBy || null,
-            createdByName: user.createdByName || null
+            createdByName: user.createdByName || null,
+            createdAt: new Date()
           }
         });
-    } catch {
-      // fallback handled in memory
+    } catch (err) {
+      console.error('Postgres createDbUser error:', err);
     }
   }
 }

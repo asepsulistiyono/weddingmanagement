@@ -193,4 +193,5 @@ export type RealtimeMessage =
   | { type: 'GUEST_CHECKED_IN'; payload: { guest: Guest; timestamp: string } }
   | { type: 'SETTINGS_UPDATED'; payload: WeddingSettings }
   | { type: 'GALLERY_UPDATED'; payload: GalleryPhoto[] }
-  | { type: 'BROADCAST_ANNOUNCEMENT'; payload: { message: string; timestamp: string } };
+  | { type: 'BROADCAST_ANNOUNCEMENT'; payload: { message: string; timestamp: string } }
+  | { type: 'USERS_UPDATED'; payload: AdminUser[] };

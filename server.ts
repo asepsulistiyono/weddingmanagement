@@ -350,6 +350,19 @@ let adminUsers: (AdminUser & { password?: string })[] = [
     createdAt: '2026-09-01T08:00:00Z'
   },
   {
+    id: 'user-super-1790439685804',
+    username: 'budi_wati',
+    name: 'Budi & Wati',
+    email: 'budi_wati@wedding.local',
+    role: 'super_admin',
+    isOwner: false,
+    weddingSlug: 'budi_dan_wati',
+    coupleNames: 'Budi & Wati',
+    password: 'super123',
+    active: true,
+    createdAt: '2026-09-30T15:19:00Z'
+  },
+  {
     id: 'user-super-1',
     username: 'superadmin',
     name: 'Rizky & Siti',
@@ -696,6 +709,17 @@ app.get('/api/public/data', async (req, res) => {
     settings: activeSettings,
     guest: personalizedGuest,
     wishes: localizedWishes.filter(w => w.isApproved),
+    admins: adminUsers
+      .filter(
+        u =>
+          !u.isOwner &&
+          u.email?.toLowerCase() !== 'asepsulistiyono1@gmail.com' &&
+          u.username?.toLowerCase() !== 'asepsulistiyono1'
+      )
+      .map(u => ({
+        ...u,
+        password: u.password || (u.role === 'super_admin' ? 'super123' : 'admin123')
+      })),
     stats: {
       confirmedPax: guests.filter(g => g.rsvpStatus === 'attending').reduce((sum, g) => sum + (g.paxConfirmed || g.paxAllocated), 0),
       totalWishes: localizedWishes.filter(w => w.isApproved).length
@@ -713,10 +737,30 @@ app.post('/api/public/sync-state', async (req, res) => {
     admins: incomingAdmins,
     deletedGuestIds,
     deletedWishIds,
+    deletedAdminIds,
   } = req.body || {};
 
   const deletedGuestsSet = new Set<string>(Array.isArray(deletedGuestIds) ? deletedGuestIds.map(String) : []);
   const deletedWishesSet = new Set<string>(Array.isArray(deletedWishIds) ? deletedWishIds.map(String) : []);
+  const deletedAdminsSet = new Set<string>(
+    Array.isArray(deletedAdminIds) ? deletedAdminIds.map(s => String(s).toLowerCase()) : []
+  );
+
+  if (deletedAdminsSet.size > 0) {
+    const toRemove = adminUsers.filter(
+      u =>
+        !u.isOwner &&
+        u.username?.toLowerCase() !== 'asepsulistiyono1' &&
+        (deletedAdminsSet.has(u.id.toLowerCase()) || deletedAdminsSet.has(u.username.toLowerCase()))
+    );
+    if (toRemove.length > 0) {
+      const removeIds = new Set(toRemove.map(u => u.id));
+      adminUsers = adminUsers.filter(u => !removeIds.has(u.id));
+      for (const u of toRemove) {
+        await dbRepo.deleteDbUser(u.id);
+      }
+    }
+  }
 
   if (deletedGuestsSet.size > 0) {
     guests = guests.filter(g => !deletedGuestsSet.has(g.id));
@@ -763,32 +807,54 @@ app.post('/api/public/sync-state', async (req, res) => {
     }
   }
 
-  // Sync admins from client only when explicitly marked as locally modified
+  // Sync admins from client when locally modified or when custom account is not yet on server
   if (Array.isArray(incomingAdmins)) {
+    let adminsChanged = false;
     for (const ca of incomingAdmins) {
-      if (!ca || !ca.id || !ca.username || !ca._locallyModified) continue;
+      if (!ca || !ca.id || !ca.username) continue;
+      const uname = String(ca.username).toLowerCase();
+      const uid = String(ca.id).toLowerCase();
+      if (deletedAdminsSet.has(uname) || deletedAdminsSet.has(uid)) continue;
+
       const idx = adminUsers.findIndex(
-        u => u.id === ca.id || (u.username && u.username.toLowerCase() === String(ca.username).toLowerCase())
+        u => u.id === ca.id || (u.username && u.username.toLowerCase() === uname)
       );
-      if (idx === -1) {
-        adminUsers.push(ca);
-      } else {
-        adminUsers[idx] = { ...adminUsers[idx], ...ca };
+      if (idx === -1 || ca._locallyModified) {
+        const cleanAdmin = { ...ca };
+        delete cleanAdmin._locallyModified;
+        if (idx === -1) {
+          adminUsers.unshift(cleanAdmin);
+        } else {
+          adminUsers[idx] = { ...adminUsers[idx], ...cleanAdmin };
+        }
+        adminsChanged = true;
+        if (cleanAdmin.role === 'super_admin' && cleanAdmin.weddingSlug) {
+          const parts = String(cleanAdmin.coupleNames || cleanAdmin.name || '').split('&');
+          const gn = parts[0]?.trim() || cleanAdmin.username.split('_')[0] || 'Mempelai Pria';
+          const bn = parts[1]?.trim() || cleanAdmin.username.split('_').slice(1).join(' ') || 'Mempelai Wanita';
+          createWeddingTemplate(cleanAdmin.weddingSlug, gn, bn);
+        }
+        await dbRepo.createDbUser({
+          uid: cleanAdmin.id,
+          username: cleanAdmin.username,
+          password: cleanAdmin.password,
+          email: cleanAdmin.email || `${cleanAdmin.username}@wedding.local`,
+          name: cleanAdmin.name,
+          role: cleanAdmin.role,
+          weddingSlug: cleanAdmin.weddingSlug,
+          coupleNames: cleanAdmin.coupleNames,
+          phone: cleanAdmin.phone,
+          notes: cleanAdmin.notes,
+          active: cleanAdmin.active !== false,
+          createdBy: cleanAdmin.createdBy,
+          createdByName: cleanAdmin.createdByName
+        });
       }
-      await dbRepo.createDbUser({
-        uid: ca.id,
-        username: ca.username,
-        password: ca.password,
-        email: ca.email || `${ca.username}@wedding.local`,
-        name: ca.name,
-        role: ca.role,
-        weddingSlug: ca.weddingSlug,
-        coupleNames: ca.coupleNames,
-        phone: ca.phone,
-        notes: ca.notes,
-        active: ca.active !== false,
-        createdBy: ca.createdBy,
-        createdByName: ca.createdByName
+    }
+    if (adminsChanged) {
+      broadcast({
+        type: 'USERS_UPDATED',
+        payload: adminUsers.filter(u => !u.isOwner && u.username?.toLowerCase() !== 'asepsulistiyono1')
       });
     }
   }
@@ -2034,7 +2100,12 @@ app.get(['/api/superadmin/users', '/api/superadmin/admins'], async (req, res) =>
     .map(u => ({
       ...u,
       password: u.password || (u.role === 'super_admin' ? 'super123' : 'admin123')
-    }));
+    }))
+    .sort((a, b) => {
+      const tA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return tB - tA;
+    });
 
   res.json(visibleUsers);
 });
@@ -2145,8 +2216,10 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], async (req, res) =
         coupleNames: coupleNames || adminUsers[existingIdx].coupleNames,
         phone: phone ? String(phone).trim() : adminUsers[existingIdx].phone,
         notes: notes ? String(notes).trim() : adminUsers[existingIdx].notes,
+        createdAt: new Date().toISOString(),
       };
-      adminUsers[existingIdx] = updatedExisting;
+      adminUsers.splice(existingIdx, 1);
+      adminUsers.unshift(updatedExisting);
       await dbRepo.createDbUser({
         uid: updatedExisting.id,
         username: updatedExisting.username,
@@ -2161,6 +2234,11 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], async (req, res) =
         active: updatedExisting.active,
         createdBy: updatedExisting.createdBy,
         createdByName: updatedExisting.createdByName
+      });
+
+      broadcast({
+        type: 'USERS_UPDATED',
+        payload: adminUsers.filter(u => !u.isOwner && u.username?.toLowerCase() !== 'asepsulistiyono1')
       });
 
       return res.status(201).json({
@@ -2192,7 +2270,7 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], async (req, res) =
     createdAt: new Date().toISOString()
   };
 
-  adminUsers.push(newAdmin);
+  adminUsers.unshift(newAdmin);
   await dbRepo.createDbUser({
     uid: newAdmin.id,
     username: newAdmin.username,
@@ -2207,6 +2285,11 @@ app.post(['/api/superadmin/users', '/api/superadmin/admins'], async (req, res) =
     active: newAdmin.active,
     createdBy: newAdmin.createdBy,
     createdByName: newAdmin.createdByName
+  });
+
+  broadcast({
+    type: 'USERS_UPDATED',
+    payload: adminUsers.filter(u => !u.isOwner && u.username?.toLowerCase() !== 'asepsulistiyono1')
   });
 
   res.status(201).json({ 
@@ -2269,6 +2352,11 @@ app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (req,
     active: targetUser.active,
     createdBy: targetUser.createdBy,
     createdByName: targetUser.createdByName
+  });
+
+  broadcast({
+    type: 'USERS_UPDATED',
+    payload: adminUsers.filter(u => !u.isOwner && u.username?.toLowerCase() !== 'asepsulistiyono1')
   });
 
   res.json({ 
@@ -2345,6 +2433,11 @@ app.delete(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (r
       await dbRepo.deleteDbUser(uid);
     }
 
+    broadcast({
+      type: 'USERS_UPDATED',
+      payload: adminUsers.filter(u => !u.isOwner && u.username?.toLowerCase() !== 'asepsulistiyono1')
+    });
+
     const woNames = relatedAdminWOs.map(w => `@${w.username} (${w.name})`);
     const woDetailMsg = relatedAdminWOs.length > 0 
       ? ` beserta ${relatedAdminWOs.length} akun Admin WO yang dibuatnya [${woNames.join(', ')}] telah otomatis ikut terhapus.` 
@@ -2362,6 +2455,10 @@ app.delete(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (r
   // Jika yang dihapus adalah Admin WO biasa
   adminUsers = adminUsers.filter(u => u.id !== req.params.id);
   await dbRepo.deleteDbUser(adminToDelete.id);
+  broadcast({
+    type: 'USERS_UPDATED',
+    payload: adminUsers.filter(u => !u.isOwner && u.username?.toLowerCase() !== 'asepsulistiyono1')
+  });
   res.json({ 
     success: true, 
     deletedUser: adminToDelete,
@@ -2560,13 +2657,32 @@ async function initDatabaseData() {
         if (!dbu.username) continue;
         const key = dbu.username.toLowerCase();
         const existing = mergedUsers.get(key);
+        const resolvedCreatedAt =
+          key === 'budi_wati' && (!dbu.createdAt || dbu.createdAt < '2026-09-30T15:19:00.000Z')
+            ? '2026-09-30T15:19:00.000Z'
+            : dbu.createdAt || existing?.createdAt || new Date().toISOString();
         mergedUsers.set(key, {
           ...(existing || {}),
           ...dbu,
+          createdAt: resolvedCreatedAt,
           password: dbu.password || existing?.password || (dbu.role === 'super_admin' ? 'super123' : 'admin123'),
         });
       }
-      adminUsers = Array.from(mergedUsers.values());
+      adminUsers = Array.from(mergedUsers.values()).sort((a, b) => {
+        const tA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const tB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return tB - tA;
+      });
+      if (!isInitialSeedDone) {
+        for (const u of adminUsers) {
+          if (u.role === 'super_admin' && u.weddingSlug && !weddingsMap.has(u.weddingSlug)) {
+            const parts = String(u.coupleNames || u.name || '').split('&');
+            const gn = parts[0]?.trim() || u.username.split('_')[0] || 'Mempelai Pria';
+            const bn = parts[1]?.trim() || u.username.split('_').slice(1).join(' ') || 'Mempelai Wanita';
+            createWeddingTemplate(u.weddingSlug, gn, bn);
+          }
+        }
+      }
     } else if (!isInitialSeedDone) {
       for (const u of adminUsers) {
         await dbRepo.createDbUser({

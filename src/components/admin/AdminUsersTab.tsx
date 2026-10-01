@@ -33,6 +33,7 @@ import {
   useAuth,
   getCachedAdminsList,
   saveCachedAdminUser,
+  replaceCachedAdminsFromServer,
   deleteCachedAdminUser,
   isOwnerAccountCheck,
 } from '../../context/AuthContext.tsx';
@@ -106,7 +107,7 @@ export const AdminUsersTab: React.FC = () => {
       const url = currentUser
         ? `/api/superadmin/users?userId=${encodeURIComponent(currentUser.id)}&username=${encodeURIComponent(currentUser.username || '')}`
         : '/api/superadmin/users';
-      const res = await fetch(url);
+      const res = await fetch(url, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         let loadedUsers: AdminUser[] = [];
@@ -118,8 +119,7 @@ export const AdminUsersTab: React.FC = () => {
           loadedUsers = data.admins;
         }
         if (loadedUsers.length > 0) {
-          loadedUsers.forEach((u) => saveCachedAdminUser(u));
-          const mergedList = getCachedAdminsList();
+          const mergedList = replaceCachedAdminsFromServer(loadedUsers);
           setUsers(mergedList);
           return;
         }
@@ -135,6 +135,19 @@ export const AdminUsersTab: React.FC = () => {
 
   useEffect(() => {
     fetchUsers();
+    const handleAdminsUpdated = () => {
+      fetchUsers();
+    };
+    window.addEventListener('admins-updated', handleAdminsUpdated);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchUsers();
+      }
+    }, 4000);
+    return () => {
+      window.removeEventListener('admins-updated', handleAdminsUpdated);
+      window.clearInterval(interval);
+    };
   }, [currentUser]);
 
   const isUserOwnerAccount = (u: AdminUser) => isOwnerAccountCheck(u);
@@ -468,14 +481,15 @@ export const AdminUsersTab: React.FC = () => {
     setFormLoading(true);
     setErrorMsg(null);
 
-    const applyCreatedUserSuccess = (createdUser: AdminUser) => {
+    const applyCreatedUserSuccess = (createdUser: AdminUser, savedOnServer: boolean = false) => {
       const fullUser: AdminUser & { password?: string } = {
         ...createdUser,
         password: password.trim(),
         phone: clientPhone.trim() || createdUser.phone,
         notes: packageNotes.trim() || createdUser.notes,
+        createdAt: createdUser.createdAt || new Date().toISOString(),
       };
-      saveCachedAdminUser(fullUser);
+      saveCachedAdminUser(fullUser, !savedOnServer);
       setUsers((prev) => [
         fullUser,
         ...prev.filter(
@@ -525,7 +539,7 @@ export const AdminUsersTab: React.FC = () => {
       if (contentType.includes('application/json')) {
         const data = await res.json();
         if (res.ok && (data.user || data.admin)) {
-          applyCreatedUserSuccess(data.user || data.admin);
+          applyCreatedUserSuccess(data.user || data.admin, true);
           return;
         }
         if (!isOwner && res.status === 403) {
