@@ -29,14 +29,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 }) => {
   const { login } = useAuth()
 
-  const [email, setEmail] = useState('')
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const resetForm = useCallback(() => {
-    setEmail('')
+    setIdentifier('')
     setPassword('')
     setShowPassword(false)
     setLoading(false)
@@ -61,12 +61,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     setErrorMsg(null)
 
     try {
-      const result = await login(email.trim().toLowerCase(), password)
+      const result = await login(identifier.trim(), password)
 
       if (!result.success) {
         setErrorMsg(
           result.error ||
-            'Login gagal. Periksa email dan kata sandi Anda.',
+            'Login gagal. Periksa username/email dan kata sandi Anda.',
         )
         return
       }
@@ -131,7 +131,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               </h2>
 
               <p className="mt-1 text-xs text-stone-500 sm:text-sm">
-                Masukkan email dan kata sandi akun pengelola Anda.
+                Masukkan username atau email dan kata sandi akun pengelola Anda.
               </p>
             </div>
 
@@ -148,7 +148,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label
-                  htmlFor="manager-email"
+                  htmlFor="manager-identifier"
                   className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-stone-700"
                 >
                   Username atau Email
@@ -161,16 +161,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   />
 
                   <input
-                    id="manager-email"
-                    name="email"
+                    id="manager-identifier"
+                    name="username"
                     type="text"
+                    inputMode="text"
                     required
-                    autoComplete="off"
+                    autoComplete="username"
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
+                    value={identifier}
+                    onChange={(event) => setIdentifier(event.target.value)}
                     placeholder="Masukkan username atau email"
                     className="w-full rounded-xl border border-stone-200 bg-stone-50 py-2.5 pl-10 pr-3.5 text-sm text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
                   />

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { supabase } from './supabaseClient'
 
 export default function Login() {
-  const [email, setEmail] = useState('')
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [message, setMessage] = useState('')
 
@@ -10,8 +10,15 @@ export default function Login() {
     event.preventDefault()
     setMessage('')
 
+    const clean = identifier.trim().replace(/^@+/, '').toLowerCase()
+    const emailCandidate = clean.includes('@')
+      ? clean
+      : clean === 'asepsulistiyono1' || clean === 'owner'
+      ? 'asepsulistiyono1@gmail.com'
+      : `${clean}@wedding.local`
+
     const { error } = await supabase.auth.signInWithPassword({
-      email,
+      email: emailCandidate,
       password,
     })
 
@@ -21,11 +28,12 @@ export default function Login() {
   return (
     <form onSubmit={handleLogin}>
       <label>
-        Email
+        Username atau Email
         <input
-          type="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
+          type="text"
+          value={identifier}
+          onChange={(event) => setIdentifier(event.target.value)}
+          placeholder="Masukkan username atau email"
           required
         />
       </label>

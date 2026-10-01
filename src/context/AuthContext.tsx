@@ -360,21 +360,32 @@ function authenticateWithLocalCache(
   password: string
 ): { success: boolean; user?: AdminUser; token?: string; error?: string } {
   const cleanId = identifier.trim().replace(/^@+/, '').toLowerCase();
+  const slugifiedId = cleanId.replace(/\s+/g, '_');
   const admins = getCachedAdminsList();
 
   const isOwnerAlias =
     cleanId === 'owner' ||
     cleanId === 'pemilik' ||
+    cleanId === 'asepsulistiyono1' ||
+    cleanId === 'asepsulistiyono1@gmail.com' ||
     cleanId === 'owner@wedding.com' ||
     cleanId === 'owner@wedding.local';
 
   const matched = isOwnerAlias
     ? admins.find((u) => isOwnerAccountCheck(u))
-    : admins.find(
+    : admins.find((u) => u.username.toLowerCase() === cleanId) ||
+      admins.find((u) => u.email && u.email.toLowerCase() === cleanId) ||
+      admins.find(
         (u) =>
-          u.username.toLowerCase() === cleanId ||
-          (u.email && u.email.toLowerCase() === cleanId) ||
-          (u.weddingSlug && u.weddingSlug.toLowerCase() === cleanId)
+          u.username.toLowerCase() === slugifiedId ||
+          (u.weddingSlug &&
+            (u.weddingSlug.toLowerCase() === cleanId ||
+              u.weddingSlug.toLowerCase() === slugifiedId)) ||
+          (u.email &&
+            !cleanId.includes('@') &&
+            u.email.toLowerCase().split('@')[0] === cleanId) ||
+          (u.name && u.name.trim().toLowerCase() === cleanId) ||
+          (u.coupleNames && u.coupleNames.trim().toLowerCase() === cleanId)
       );
 
   if (matched && matched.active !== false) {
@@ -414,7 +425,7 @@ function authenticateWithLocalCache(
 
   return {
     success: false,
-    error: 'Kredensial tidak valid. Silakan periksa kembali username dan kata sandi Anda.',
+    error: 'Kredensial tidak valid. Silakan periksa kembali username/email dan kata sandi Anda.',
   };
 }
 
@@ -619,13 +630,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
-    // Step B: Fallback to Supabase Auth if configured and backend was unreachable
+    // Step B: Direct Supabase users table check + Supabase Auth fallback if backend was unreachable
     if (isSupabaseConfigured) {
+      try {
+        const supaUsersList = await fetchUsersFromSupabaseClient();
+        if (supaUsersList.length > 0) {
+          replaceCachedAdminsFromServer(supaUsersList);
+          const supaCheck = authenticateWithLocalCache(normalizedIdentifier, password);
+          if (supaCheck.success && supaCheck.user) {
+            applyActiveWeddingSlugForUser(supaCheck.user);
+            setUser(supaCheck.user);
+            setToken(supaCheck.token || `token_${supaCheck.user.role}_${supaCheck.user.id}_${Date.now()}`);
+            return { success: true };
+          }
+        }
+      } catch {
+        // continue to Supabase Auth / local cache
+      }
+
+      const cachedMatch = getCachedAdminsList().find(
+        (u) => u.username.toLowerCase() === normalizedIdentifier.toLowerCase()
+      );
       const emailCandidate = normalizedIdentifier.includes('@')
         ? normalizedIdentifier
         : normalizedIdentifier.toLowerCase() === 'asepsulistiyono1'
         ? 'asepsulistiyono1@gmail.com'
-        : `${normalizedIdentifier.toLowerCase()}@wedding.local`;
+        : cachedMatch?.email || `${normalizedIdentifier.toLowerCase()}@wedding.local`;
 
       try {
         const { data: supaData, error: supaError } = await supabase.auth.signInWithPassword({

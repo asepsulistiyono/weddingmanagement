@@ -1082,12 +1082,26 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(400).json({ error: 'Username dan kata sandi harus diisi.' });
   }
 
+  const slugifiedIdentifier = loginIdentifier.replace(/\s+/g, '_');
+
   const findMatchingUser = () =>
     adminUsers.find(
+      (u) => u.username && u.username.toLowerCase() === loginIdentifier
+    ) ||
+    adminUsers.find(
+      (u) => u.email && u.email.toLowerCase() === loginIdentifier
+    ) ||
+    adminUsers.find(
       (u) =>
-        (u.username && u.username.toLowerCase() === loginIdentifier) ||
-        (u.email && u.email.toLowerCase() === loginIdentifier) ||
-        (u.weddingSlug && u.weddingSlug.toLowerCase() === loginIdentifier)
+        (u.username && u.username.toLowerCase() === slugifiedIdentifier) ||
+        (u.weddingSlug &&
+          (u.weddingSlug.toLowerCase() === loginIdentifier ||
+            u.weddingSlug.toLowerCase() === slugifiedIdentifier)) ||
+        (u.email &&
+          !loginIdentifier.includes('@') &&
+          u.email.toLowerCase().split('@')[0] === loginIdentifier) ||
+        (u.name && u.name.trim().toLowerCase() === loginIdentifier) ||
+        (u.coupleNames && u.coupleNames.trim().toLowerCase() === loginIdentifier)
     );
 
   // Always sync from PostgreSQL before login check so accounts created/updated on another device (Computer/HP) work immediately
