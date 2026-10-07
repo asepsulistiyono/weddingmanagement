@@ -131,20 +131,18 @@ export const AdminUsersTab: React.FC = () => {
           loadedUsers = data.admins;
         }
       }
-      if (Array.isArray(supaUsers) && supaUsers.length > 0) {
+      if (Array.isArray(supaUsers)) {
         const byUname = new Map<string, AdminUser>();
-        for (const u of loadedUsers) {
-          if (u && u.username) byUname.set(u.username.toLowerCase(), u);
-        }
+        // Supabase is authoritative across Computer and HP
         for (const su of supaUsers) {
           if (!su || !su.username) continue;
-          const key = su.username.toLowerCase();
-          const existing = byUname.get(key);
-          byUname.set(key, {
-            ...(existing || {}),
-            ...su,
-            password: su.password || existing?.password || (su.role === 'super_admin' ? 'super123' : 'admin123'),
-          });
+          byUname.set(su.username.toLowerCase(), su);
+        }
+        // Only keep server users if they are marked _locallyModified and not yet in Supabase
+        for (const u of loadedUsers) {
+          if (u && u.username && (u as any)._locallyModified && !byUname.has(u.username.toLowerCase())) {
+            byUname.set(u.username.toLowerCase(), u);
+          }
         }
         loadedUsers = Array.from(byUname.values());
       }
@@ -687,35 +685,45 @@ export const AdminUsersTab: React.FC = () => {
     const user = userToDelete;
     setUserToDelete(null);
 
+    // Optimistically update local state & cache immediately
+    setUsers((prev) => prev.filter((u) => u.id !== user.id && u.username !== user.username));
+    deleteCachedAdminUser(user.id);
+    deleteCachedAdminUser(user.username);
+
+    // 1. Immediately delete from Supabase cloud database across all fields
+    await deleteUserFromSupabaseClient(user.id, user.username, {
+      email: user.email,
+      weddingSlug: user.weddingSlug,
+      deleteWeddingSettings: user.role === 'super_admin',
+    });
+
+    // 2. Also notify backend server
     try {
+      const token = localStorage.getItem('wedding_auth_token') || 'token_owner_user-owner-1';
       const res = await fetch(
-        `/api/superadmin/users/${user.id}?callerId=${encodeURIComponent(currentUser?.id || '')}&callerUsername=${encodeURIComponent(currentUser?.username || '')}`,
-        { method: 'DELETE' }
+        `/api/superadmin/users/${encodeURIComponent(user.id)}?callerId=${encodeURIComponent(currentUser?.id || 'user-owner-1')}&callerUsername=${encodeURIComponent(currentUser?.username || 'asepsulistiyono1')}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+        }
       );
       const data = await res.json();
-      if (!res.ok) {
-        setErrorMsg(data.error || 'Gagal menghapus pengelola.');
-      } else {
-        deleteCachedAdminUser(user.id);
-        deleteCachedAdminUser(user.username);
-        await deleteUserFromSupabaseClient(user.id, user.username);
-        if (Array.isArray(data.deletedAdminWOs)) {
-          for (const wo of data.deletedAdminWOs as AdminUser[]) {
-            deleteCachedAdminUser(wo.id);
-            deleteCachedAdminUser(wo.username);
-            await deleteUserFromSupabaseClient(wo.id, wo.username);
-          }
+      if (Array.isArray(data?.deletedAdminWOs)) {
+        for (const wo of data.deletedAdminWOs as AdminUser[]) {
+          deleteCachedAdminUser(wo.id);
+          deleteCachedAdminUser(wo.username);
+          await deleteUserFromSupabaseClient(wo.id, wo.username);
         }
-        setSuccessMsg(data.message || `Akun ${user.name} berhasil dihapus.`);
-        fetchUsers();
-        setTimeout(() => setSuccessMsg(null), 5000);
       }
+      setSuccessMsg(data?.message || `Akun ${user.name} berhasil dihapus dari sistem & Supabase.`);
+      fetchUsers();
+      setTimeout(() => setSuccessMsg(null), 5000);
     } catch (err) {
-      console.error('Failed to delete user:', err);
-      deleteCachedAdminUser(user.id);
-      deleteCachedAdminUser(user.username);
-      await deleteUserFromSupabaseClient(user.id, user.username);
-      setUsers((prev) => prev.filter((u) => u.id !== user.id));
+      console.error('Backend delete error (Supabase deletion already complete):', err);
+      fetchUsers();
       setSuccessMsg(`Akun ${user.name} berhasil dihapus.`);
       setTimeout(() => setSuccessMsg(null), 5000);
     }

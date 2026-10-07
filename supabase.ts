@@ -250,13 +250,44 @@ export async function syncUserToSupabaseClient(user: {
   }
 }
 
-export async function deleteUserFromSupabaseClient(uid: string, username?: string): Promise<boolean> {
+export async function deleteUserFromSupabaseClient(
+  uid: string,
+  username?: string,
+  options?: { email?: string; weddingSlug?: string; deleteWeddingSettings?: boolean }
+): Promise<boolean> {
   if (!isSupabaseReady()) return false;
   try {
-    await supabase.from('users').delete().eq('uid', uid);
-    if (username) {
-      await supabase.from('users').delete().eq('username', username.toLowerCase());
+    const cleanUid = String(uid || '').trim();
+    const cleanUsername = String(username || '').trim().toLowerCase();
+    const cleanEmail = String(options?.email || '').trim().toLowerCase();
+    const cleanSlug = String(options?.weddingSlug || '').trim().toLowerCase();
+
+    // 1. Delete by uid
+    if (cleanUid) {
+      await supabase.from('users').delete().eq('uid', cleanUid);
     }
+
+    // 2. Delete by username
+    if (cleanUsername) {
+      await supabase.from('users').delete().eq('username', cleanUsername);
+      await supabase.from('users').delete().ilike('username', cleanUsername);
+    }
+
+    // 3. Delete by email
+    if (cleanEmail) {
+      await supabase.from('users').delete().eq('email', cleanEmail);
+      await supabase.from('users').delete().ilike('email', cleanEmail);
+    }
+
+    // 4. Cascade delete associated WO staff and wedding_settings for this wedding slug
+    if (cleanSlug && cleanSlug !== 'main' && cleanSlug !== 'default' && cleanSlug !== 'rizky_dan_siti') {
+      await supabase.from('users').delete().eq('wedding_slug', cleanSlug);
+      if (options?.deleteWeddingSettings !== false) {
+        await supabase.from('wedding_settings').delete().eq('id', cleanSlug);
+      }
+    }
+
+    clearSupabaseKeyError();
     return true;
   } catch {
     return false;

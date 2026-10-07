@@ -409,14 +409,12 @@ async function pushLocalCacheToServer(): Promise<void> {
       }
     }
 
+    const deletedGuestIds = Array.from(getDeletedIds(DELETED_GUESTS_KEY));
+    const deletedWishIds = Array.from(getDeletedIds(DELETED_WISHES_KEY));
+    const deletedAdminIds = Array.from(getDeletedIds('wedding_deleted_admins'));
+    const deletedAdminSet = new Set(deletedAdminIds.map(s => String(s).toLowerCase()));
+
     let cachedAdmins: any[] = [];
-    const defaultAdminIds = new Set([
-      'user-owner-1',
-      'user-super-1',
-      'user-super-2',
-      'user-super-romeo-juliet',
-      'user-admin-1',
-    ]);
     try {
       const rawAdmins = localStorage.getItem('wedding_cached_admins');
       if (rawAdmins) {
@@ -426,7 +424,9 @@ async function pushLocalCacheToServer(): Promise<void> {
             (a) =>
               a &&
               a.username &&
-              (a._locallyModified === true || !defaultAdminIds.has(String(a.id || '')))
+              a._locallyModified === true &&
+              !deletedAdminSet.has(String(a.username).toLowerCase()) &&
+              !deletedAdminSet.has(String(a.id || '').toLowerCase())
           );
         }
       }
@@ -436,9 +436,6 @@ async function pushLocalCacheToServer(): Promise<void> {
 
     const defaultGuestIds = new Set(['g-1', 'g-2', 'g-3', 'g-4', 'g-5', 'g-6']);
     const defaultWishIds = new Set(['w-1', 'w-2', 'w-3', 'w-4']);
-    const deletedGuestIds = Array.from(getDeletedIds(DELETED_GUESTS_KEY));
-    const deletedWishIds = Array.from(getDeletedIds(DELETED_WISHES_KEY));
-    const deletedAdminIds = Array.from(getDeletedIds('wedding_deleted_admins'));
 
     const allCachedGuests = loadCachedGuests();
     const cachedGuests = allCachedGuests.filter(
@@ -533,6 +530,27 @@ async function pushLocalCacheToServer(): Promise<void> {
         return copy;
       });
       saveCachedWishes(cleanedWishes);
+    }
+    if (cachedAdmins.length > 0) {
+      try {
+        const raw = localStorage.getItem('wedding_cached_admins');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            const cleaned = parsed.map((a) => {
+              if (cachedAdmins.some((ca) => ca.id === a.id || ca.username === a.username)) {
+                const c = { ...a };
+                delete c._locallyModified;
+                return c;
+              }
+              return a;
+            });
+            localStorage.setItem('wedding_cached_admins', JSON.stringify(cleaned));
+          }
+        }
+      } catch {
+        // ignore
+      }
     }
 
     // 2. Also sync to backend server
@@ -991,25 +1009,24 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setSettings(resolvedSettings);
         settingsRef.current = resolvedSettings;
 
-        // Merge admins from API + Supabase
+        // Merge admins: Supabase is authoritative across all devices (Computer & HP)
         const combinedAdminsMap = new Map<string, any>();
-        if (Array.isArray(apiData?.admins)) {
-          for (const a of apiData.admins) {
-            if (a && a.username) combinedAdminsMap.set(a.username.toLowerCase(), a);
-          }
-        }
         if (Array.isArray(supaUsers)) {
           for (const su of supaUsers) {
             if (su && su.username && !su.isOwner) {
               combinedAdminsMap.set(su.username.toLowerCase(), su);
             }
           }
+        } else if (Array.isArray(apiData?.admins)) {
+          for (const a of apiData.admins) {
+            if (a && a.username && !a.isOwner) {
+              combinedAdminsMap.set(a.username.toLowerCase(), a);
+            }
+          }
         }
         const combinedAdmins = Array.from(combinedAdminsMap.values());
-        if (combinedAdmins.length > 0) {
-          replaceCachedAdminsFromServer(combinedAdmins);
-          window.dispatchEvent(new Event('admins-updated'));
-        }
+        replaceCachedAdminsFromServer(combinedAdmins);
+        window.dispatchEvent(new Event('admins-updated'));
 
         pushLocalCacheToServer();
 

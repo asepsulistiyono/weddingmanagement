@@ -250,6 +250,28 @@ export async function saveSettings(settings: WeddingSettings, id: string = 'main
   }
 }
 
+export async function deleteSettings(id: string): Promise<void> {
+  const cleanId = String(id || '').trim();
+  if (!cleanId || cleanId === 'main' || cleanId === 'default' || cleanId === 'rizky_dan_siti') return;
+
+  if (canUseSupabase()) {
+    try {
+      await supabase.from('wedding_settings').delete().eq('id', cleanId);
+      clearSupabaseKeyError();
+    } catch (err) {
+      handleSupabaseError(err);
+    }
+  }
+
+  if (isPostgresReady()) {
+    try {
+      await db.delete(weddingSettingsTable).where(eq(weddingSettingsTable.id, cleanId));
+    } catch {
+      // ignore
+    }
+  }
+}
+
 export async function getAllWeddings(): Promise<Array<{ id: string; data: WeddingSettings; updatedAt?: string }>> {
   const byId = new Map<string, { data: WeddingSettings; updatedAt?: string }>();
 
@@ -924,11 +946,25 @@ export async function createDbUser(user: {
   }
 }
 
-export async function deleteDbUser(uid: string): Promise<void> {
+export async function deleteDbUser(uid: string, username?: string, weddingSlug?: string): Promise<void> {
+  const cleanUid = String(uid || '').trim();
+  const cleanUsername = String(username || '').trim().toLowerCase();
+  const cleanSlug = String(weddingSlug || '').trim().toLowerCase();
+
   if (canUseSupabase()) {
     try {
-      const { error } = await supabase.from('users').delete().eq('uid', uid);
-      if (error) handleSupabaseError(error);
+      if (cleanUid) {
+        await supabase.from('users').delete().eq('uid', cleanUid);
+      }
+      if (cleanUsername) {
+        await supabase.from('users').delete().eq('username', cleanUsername);
+        await supabase.from('users').delete().ilike('username', cleanUsername);
+      }
+      if (cleanSlug && cleanSlug !== 'main' && cleanSlug !== 'default' && cleanSlug !== 'rizky_dan_siti') {
+        await supabase.from('users').delete().eq('wedding_slug', cleanSlug);
+        await supabase.from('wedding_settings').delete().eq('id', cleanSlug);
+      }
+      clearSupabaseKeyError();
     } catch (err) {
       handleSupabaseError(err);
     }
@@ -936,7 +972,16 @@ export async function deleteDbUser(uid: string): Promise<void> {
 
   if (isPostgresReady()) {
     try {
-      await db.delete(users).where(eq(users.uid, uid));
+      if (cleanUid) {
+        await db.delete(users).where(eq(users.uid, cleanUid));
+      }
+      if (cleanUsername) {
+        await db.delete(users).where(eq(users.username, cleanUsername));
+      }
+      if (cleanSlug && cleanSlug !== 'main' && cleanSlug !== 'default' && cleanSlug !== 'rizky_dan_siti') {
+        await db.delete(users).where(eq(users.weddingSlug, cleanSlug));
+        await db.delete(weddingSettingsTable).where(eq(weddingSettingsTable.id, cleanSlug));
+      }
     } catch {
       // fallback handled in memory
     }

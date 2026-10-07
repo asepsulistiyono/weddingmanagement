@@ -351,76 +351,6 @@ let adminUsers: (AdminUser & { password?: string })[] = [
     active: true,
     password: 'owner123',
     createdAt: '2026-09-01T08:00:00Z'
-  },
-  {
-    id: 'user-super-1790439685804',
-    username: 'budi_wati',
-    name: 'Budi & Wati',
-    email: 'budi_wati@wedding.local',
-    role: 'super_admin',
-    isOwner: false,
-    weddingSlug: 'budi_dan_wati',
-    coupleNames: 'Budi & Wati',
-    password: 'super123',
-    active: true,
-    createdAt: '2026-09-30T15:19:00Z'
-  },
-  {
-    id: 'user-super-1',
-    username: 'superadmin',
-    name: 'Romeo & Juliet',
-    email: 'superadmin@wedding.com',
-    role: 'super_admin',
-    isOwner: false,
-    weddingSlug: 'romeo_dan_juliet',
-    coupleNames: 'Romeo & Juliet',
-    phone: '081234567890',
-    notes: 'Paket Platinum 500 Undangan (Gedung Mulia)',
-    password: 'super123',
-    active: true,
-    createdAt: '2026-09-01T10:00:00Z'
-  },
-  {
-    id: 'user-super-2',
-    username: 'thomas_juwita',
-    name: 'Thomas & Juwita',
-    email: 'thomas@wedding.local',
-    role: 'super_admin',
-    isOwner: false,
-    weddingSlug: 'thomas_dan_juwita',
-    coupleNames: 'Thomas & Juwita',
-    phone: '081298765432',
-    notes: 'Paket Diamond 1000 Undangan (Outdoor Garden)',
-    password: 'mempelai123',
-    active: true,
-    createdAt: '2026-09-15T09:00:00Z'
-  },
-  {
-    id: 'user-super-romeo-juliet',
-    username: 'romeo_juliet',
-    name: 'Romeo & Juliet',
-    email: 'romeo_juliet@wedding.local',
-    role: 'super_admin',
-    isOwner: false,
-    weddingSlug: 'romeo_dan_juliet',
-    coupleNames: 'Romeo & Juliet',
-    password: 'super123',
-    active: true,
-    createdAt: '2026-09-28T19:00:00Z'
-  },
-  {
-    id: 'user-admin-1',
-    username: 'adminwo',
-    name: 'Admin WO (Reception Desk)',
-    email: 'admin@wedding.com',
-    role: 'admin',
-    isOwner: false,
-    active: true,
-    createdBy: 'user-super-1',
-    createdByName: 'Romeo & Juliet',
-    weddingSlug: 'romeo_dan_juliet',
-    password: 'admin123',
-    createdAt: '2026-09-05T14:30:00Z'
   }
 ];
 
@@ -2593,9 +2523,15 @@ app.put(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (req,
 // Super Admin: Remove admin operator
 app.delete(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (req, res) => {
   await ensureDatabaseSynced();
-  const adminToDelete = adminUsers.find(u => u.id === req.params.id);
+  const idOrUname = String(req.params.id || '').trim().toLowerCase();
+  const adminToDelete = adminUsers.find(
+    u => u.id.toLowerCase() === idOrUname || u.username?.toLowerCase() === idOrUname
+  );
+
   if (!adminToDelete) {
-    return res.status(404).json({ error: 'Admin tidak ditemukan.' });
+    // If not found in memory, clean up database & Supabase directly
+    await dbRepo.deleteDbUser(idOrUname, idOrUname);
+    return res.json({ success: true, message: `Akun ${idOrUname} telah dibersihkan.` });
   }
 
   // 1. MUTLAK: Akun Pemilik Website Utama (asepsulistiyono1@gmail.com) memiliki proteksi absolut dan tidak dapat dihapus oleh siapa pun
@@ -2621,9 +2557,12 @@ app.delete(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (r
   );
 
   const isOwnerCalling = Boolean(
+    authHeader.includes('owner') ||
     authHeader.includes('user-owner-1') ||
     callerId === 'user-owner-1' ||
+    callerId === 'asepsulistiyono1' ||
     callerUsername === 'asepsulistiyono1' ||
+    callerUsername === 'owner' ||
     callerUser?.isOwner ||
     callerUser?.username?.toLowerCase() === 'asepsulistiyono1' ||
     callerUser?.email?.toLowerCase() === 'asepsulistiyono1@gmail.com'
@@ -2649,11 +2588,17 @@ app.delete(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (r
     );
 
     const idsToDelete = [adminToDelete.id, ...relatedAdminWOs.map(u => u.id)];
+    const usersToDelete = [adminToDelete, ...relatedAdminWOs];
     adminUsers = adminUsers.filter(u => !idsToDelete.includes(u.id));
 
-    // Hapus juga record user di database bila tersimpan
-    for (const uid of idsToDelete) {
-      await dbRepo.deleteDbUser(uid);
+    // Hapus juga record user di database & Supabase
+    for (const u of usersToDelete) {
+      await dbRepo.deleteDbUser(u.id, u.username, u.weddingSlug);
+    }
+
+    if (adminToDelete.weddingSlug) {
+      weddingsMap.delete(adminToDelete.weddingSlug);
+      await dbRepo.deleteSettings(adminToDelete.weddingSlug);
     }
 
     broadcast({
@@ -2676,8 +2621,8 @@ app.delete(['/api/superadmin/users/:id', '/api/superadmin/admins/:id'], async (r
   }
 
   // Jika yang dihapus adalah Admin WO biasa
-  adminUsers = adminUsers.filter(u => u.id !== req.params.id);
-  await dbRepo.deleteDbUser(adminToDelete.id);
+  adminUsers = adminUsers.filter(u => u.id !== adminToDelete.id && u.username !== adminToDelete.username);
+  await dbRepo.deleteDbUser(adminToDelete.id, adminToDelete.username, adminToDelete.weddingSlug);
   broadcast({
     type: 'USERS_UPDATED',
     payload: adminUsers.filter(u => !u.isOwner && u.username?.toLowerCase() !== 'asepsulistiyono1')
@@ -2889,24 +2834,29 @@ async function initDatabaseData() {
 
     if (Array.isArray(dbUsers) && dbUsers.length > 0) {
       const mergedUsers = new Map<string, AdminUser & { password?: string }>();
-      // Keep default owner & base accounts as baseline
-      for (const baseU of adminUsers) {
-        mergedUsers.set(baseU.username.toLowerCase(), baseU);
-      }
+      // Only keep the Owner account as baseline
+      const ownerAccount = adminUsers.find(
+        (u) => u.isOwner || u.username?.toLowerCase() === 'asepsulistiyono1'
+      ) || {
+        id: 'user-owner-1',
+        username: 'asepsulistiyono1',
+        name: 'Asep Sulistiyono (Owner / Pemilik Website)',
+        email: 'asepsulistiyono1@gmail.com',
+        role: 'super_admin',
+        isOwner: true,
+        active: true,
+        password: 'owner123',
+        createdAt: '2026-09-01T08:00:00Z',
+      };
+      mergedUsers.set(ownerAccount.username.toLowerCase(), ownerAccount);
+
       // Database users are authoritative
       for (const dbu of dbUsers) {
         if (!dbu.username) continue;
         const key = dbu.username.toLowerCase();
-        const existing = mergedUsers.get(key);
-        const resolvedCreatedAt =
-          key === 'budi_wati' && (!dbu.createdAt || dbu.createdAt < '2026-09-30T15:19:00.000Z')
-            ? '2026-09-30T15:19:00.000Z'
-            : dbu.createdAt || existing?.createdAt || new Date().toISOString();
         mergedUsers.set(key, {
-          ...(existing || {}),
           ...dbu,
-          createdAt: resolvedCreatedAt,
-          password: dbu.password || existing?.password || (dbu.role === 'super_admin' ? 'super123' : 'admin123'),
+          password: dbu.password || (dbu.role === 'super_admin' ? 'super123' : 'admin123'),
         });
       }
       adminUsers = Array.from(mergedUsers.values()).sort((a, b) => {
